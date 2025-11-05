@@ -6,14 +6,13 @@ import plotly.express as px
 import requests
 import json
 from shapely.geometry import Point
-from streamlit_folium import st_folium
 import streamlit.components.v1 as components
 
 # --- CONFIGURAÇÕES INICIAIS ---
 st.set_page_config(page_title="Zoneamento Fortaleza", layout="wide")
 
 st.title("🏙️ Consulta Interativa – Zoneamento de Fortaleza")
-st.markdown("Base construída a partir do arquivo **pdp-macrozoneamento.kmz** (PDP Fortaleza)")
+st.markdown("Mapa interativo com identificação de zonas e busca por endereço (PDP Fortaleza)")
 
 # --- CARREGAR DADOS ---
 @st.cache_data
@@ -34,77 +33,41 @@ gdf = carregar_dados()
 if gdf is None:
     st.stop()
 
-# --- BARRA LATERAL ---
-st.sidebar.header("Filtros de Consulta")
+# --- INTERFACE DE BUSCA ---
+st.subheader("📍 Buscar Endereço")
+endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, Fortaleza")
+coord_busca = None
+info_zona_busca = None
+zona_geojson = None
 
-zona_tipo = st.sidebar.multiselect(
-    "Tipo de Zona:",
-    sorted(gdf['tipo_zona'].dropna().unique().tolist()),
-    default=None
-)
-
-ca_min, ca_max = st.sidebar.slider(
-    "Coeficiente de Aproveitamento Máximo (CA)",
-    float(gdf['indice_aproveitamento_maximo'].min() or 0),
-    float(gdf['indice_aproveitamento_maximo'].max() or 5),
-    (0.0, 3.0),
-    step=0.1
-)
-
-base_mapa = st.sidebar.selectbox(
-    "Camada Base do Mapa:",
-    ["CartoDB positron", "OpenStreetMap", "Stamen Terrain", "Stamen Toner", "Esri Satellite"]
-)
-
-modo_localizacao = st.sidebar.radio("Modo de Localização:", ["Buscar por Endereço", "Selecionar no Mapa"])
-modo_render = st.sidebar.selectbox("Motor de Renderização do Mapa:", ["Automático (st_folium)", "HTML (components)"])
-
-filtro = gdf.copy()
-if zona_tipo:
-    filtro = filtro[filtro['tipo_zona'].isin(zona_tipo)]
-filtro = filtro[
-    (filtro['indice_aproveitamento_maximo'] >= ca_min) &
-    (filtro['indice_aproveitamento_maximo'] <= ca_max)
-]
-
-st.sidebar.markdown(f"**Zonas encontradas:** {len(filtro)}")
-
-# --- FUNÇÃO DE RENDERIZAÇÃO ---
-def renderizar_mapa_folium(mapa, height=700):
+if st.button("🔎 Localizar Endereço") and endereco:
     try:
-        return st_folium(mapa, width=1200, height=height, key="mapa_zoneamento", returned_objects=[])
+        url = f"https://nominatim.openstreetmap.org/search?q={endereco}, Fortaleza&format=json&limit=1"
+        response = requests.get(url, headers={'User-Agent': 'UrbanFortalApp/1.0'})
+        data = response.json()
+        if data:
+            lat, lon = float(data[0]['lat']), float(data[0]['lon'])
+            coord_busca = (lat, lon)
+            ponto = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
+            zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
+            if not zona_ponto.empty:
+                z = zona_ponto.iloc[0]
+                info_zona_busca = z
+                zona_geojson = z.geometry.__geo_interface__
+                st.success(f"📍 Endereço dentro da zona: **{z['nome_zona']}** — Tipo: **{z['tipo_zona']}**")
+            else:
+                st.warning("Endereço encontrado, mas fora de qualquer zona definida.")
+        else:
+            st.error("Endereço não encontrado. Verifique o texto digitado.")
     except Exception as e:
-        st.warning(f"st_folium falhou: {e}. Alternando para renderização HTML.")
-        html = mapa.get_root().render()
-        components.html(html, height=height)
-        return {}
+        st.error(f"Erro ao consultar o endereço: {e}")
 
 # --- MAPA BASE ---
 centro = [-3.730451, -38.521798]
-m = folium.Map(location=centro, zoom_start=12, tiles=base_mapa)
+m = folium.Map(location=centro, zoom_start=12, tiles='CartoDB positron')
 
-# Adiciona camadas base
-folium.TileLayer('OpenStreetMap', name='OpenStreetMap', attr='© OpenStreetMap contributors').add_to(m)
-folium.TileLayer('CartoDB positron', name='CartoDB positron', attr='© OpenStreetMap contributors & CartoDB').add_to(m)
-folium.TileLayer(
-    tiles='https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg',
-    name='Stamen Terrain',
-    attr='Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors'
-).add_to(m)
-folium.TileLayer(
-    tiles='https://stamen-tiles.a.ssl.fastly.net/toner/{z}/{x}/{y}.png',
-    name='Stamen Toner',
-    attr='Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors'
-).add_to(m)
-folium.TileLayer(
-    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    name='Esri Satellite',
-    attr='Tiles © Esri — Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
-).add_to(m)
-folium.LayerControl().add_to(m)
-
-# --- ADICIONA POLÍGONOS FILTRADOS ---
-for _, row in filtro.iterrows():
+# --- ADICIONA POLÍGONOS DE ZONAS ---
+for _, row in gdf.iterrows():
     if row.geometry is not None:
         folium.GeoJson(
             row.geometry.__geo_interface__,
@@ -115,135 +78,51 @@ for _, row in filtro.iterrows():
             )
         ).add_to(m)
 
-# --- LOCALIZAÇÃO ---
-st.subheader("📍 Localização")
-coord_busca = None
-info_zona_busca = None
-zona_geojson = None
-
-if modo_localizacao == "Buscar por Endereço":
-    endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, Fortaleza")
-    if st.button("🔎 Localizar Endereço") and endereco:
-        try:
-            url = f"https://nominatim.openstreetmap.org/search?q={endereco}, Fortaleza&format=json&limit=1"
-            response = requests.get(url, headers={'User-Agent': 'UrbanFortalApp/1.0'})
-            data = response.json()
-            if data:
-                lat, lon = float(data[0]['lat']), float(data[0]['lon'])
-                coord_busca = (lat, lon)
-                ponto = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
-                zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
-                if not zona_ponto.empty:
-                    z = zona_ponto.iloc[0]
-                    info_zona_busca = z
-                    zona_geojson = z.geometry.__geo_interface__
-                    st.success(f"📍 Endereço dentro da zona: **{z['nome_zona']}** — Tipo: **{z['tipo_zona']}**")
-                else:
-                    st.warning("Endereço encontrado, mas fora de qualquer zona definida.")
-            else:
-                st.error("Endereço não encontrado. Verifique o texto digitado.")
-        except Exception as e:
-            st.error(f"Erro ao consultar o endereço: {e}")
-
-# --- RENDERIZAÇÃO PRINCIPAL DO MAPA ---
-st.write(f"Renderizando mapa com {len(filtro)} zonas…")
-if modo_render == "Automático (st_folium)":
-    st_data = renderizar_mapa_folium(m, height=700)
-else:
-    html = m.get_root().render()
-    components.html(html, height=700)
-    st_data = {}
-
 # --- CLIQUE NO MAPA ---
-if modo_render == "Automático (st_folium)" and st_data and st_data.get("last_clicked"):
-    lat = st_data["last_clicked"]["lat"]
-    lon = st_data["last_clicked"]["lng"]
-    coord_busca = (lat, lon)
-    ponto = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
-    zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
-    if not zona_ponto.empty:
-        z = zona_ponto.iloc[0]
-        info_zona_busca = z
-        zona_geojson = z.geometry.__geo_interface__
-        st.success(f"📍 Ponto dentro da zona: **{z['nome_zona']}** — Tipo: **{z['tipo_zona']}**")
-    else:
-        st.warning("Nenhuma zona encontrada nesse ponto.")
+def adicionar_interatividade():
+    components.html(m.get_root().render(), height=700)
 
-# --- DESTAQUE DA ZONA E PIN ---
-if coord_busca:
+# --- DESTAQUE DE ZONA E PIN ---
+def destacar_zona(lat, lon, zona_geojson, info_zona_busca):
+    if info_zona_busca is not None and zona_geojson:
+        area_ha = info_zona_busca.geometry.to_crs(3857).area / 10000
+        perimetro_m = info_zona_busca.geometry.to_crs(3857).length
+
+        folium.GeoJson(
+            zona_geojson,
+            name="Zona Selecionada",
+            style_function=lambda x: {
+                'fillColor': 'yellow',
+                'color': 'red',
+                'weight': 4,
+                'fillOpacity': 0.15
+            },
+            tooltip=f"{info_zona_busca['nome_zona']}<br>Área: {area_ha:.2f} ha | Perímetro: {perimetro_m:.0f} m | ID: {info_zona_busca.name}"
+        ).add_to(m)
+
+        popup_text = (
+            f"<b>Zona:</b> {info_zona_busca['nome_zona']}<br>"
+            f"<b>Tipo:</b> {info_zona_busca['tipo_zona']}<br>"
+            f"<b>CA Máx:</b> {info_zona_busca['indice_aproveitamento_maximo']}<br>"
+            f"<b>Área:</b> {area_ha:.2f} ha<br>"
+            f"<b>Perímetro:</b> {perimetro_m:.0f} m<br>"
+            f"<b>ID:</b> {info_zona_busca.name}"
+        )
+
+        folium.Marker([lat, lon], popup=popup_text, icon=folium.Icon(color='red', icon='map-marker')).add_to(m)
+        m.location = [lat, lon]
+        m.zoom_start = 15
+
+# --- SE HOUVER BUSCA ---
+if coord_busca and zona_geojson:
     lat, lon = coord_busca
-    color = 'red' if modo_localizacao == "Buscar por Endereço" else 'blue'
-    popup_text = f"<b>Ponto Selecionado</b><br>Lat: {lat:.5f}, Lon: {lon:.5f}"
-    if info_zona_busca is not None:
-        popup_text += f"<br><b>Zona:</b> {info_zona_busca['nome_zona']}<br><b>Tipo:</b> {info_zona_busca['tipo_zona']}<br><b>CA Máx:</b> {info_zona_busca['indice_aproveitamento_maximo']}"
-        if zona_geojson:
-            folium.GeoJson(
-                zona_geojson,
-                name="Zona Selecionada",
-                style_function=lambda x: {
-                    'fillColor': 'yellow',
-                    'color': 'red',
-                    'weight': 4,
-                    'fillOpacity': 0.15
-                },
-                tooltip=info_zona_busca['nome_zona']
-            ).add_to(m)
+    destacar_zona(lat, lon, zona_geojson, info_zona_busca)
 
-    folium.Marker(
-        [lat, lon],
-        popup=popup_text,
-        icon=folium.Icon(color=color, icon='map-marker')
-    ).add_to(m)
-    m.location = [lat, lon]
-    m.zoom_start = 15
+# --- MAPA INTERATIVO ---
+components.html(m.get_root().render(), height=700)
 
-    if modo_render == "Automático (st_folium)":
-        renderizar_mapa_folium(m, height=700)
-    else:
-        components.html(m.get_root().render(), height=700)
+# --- INSTRUÇÕES DE CLIQUE ---
+st.markdown("**🖱️ Dica:** clique em qualquer ponto do mapa para identificar a zona correspondente.")
+st.info("O modo de clique está ativo automaticamente e o mapa é renderizado via HTML para compatibilidade total.")
 
-# --- ESTATÍSTICAS E GRÁFICOS ---
-st.subheader("📊 Estatísticas por Tipo de Zona")
-if not filtro.empty:
-    estat = filtro.groupby('tipo_zona').agg({
-        'indice_aproveitamento_maximo': 'mean',
-        'taxa_ocupacao_solo': 'mean',
-        'taxa_permeabilidade': 'mean',
-        'altura_maxima': 'mean'
-    }).round(2).reset_index()
-    st.dataframe(estat, use_container_width=True)
-
-    st.subheader("📈 Painel de Indicadores Urbanísticos")
-    col1, col2 = st.columns(2)
-    with col1:
-        fig1 = px.bar(estat, x='tipo_zona', y='indice_aproveitamento_maximo', title='CA Máximo Médio por Tipo de Zona', color='tipo_zona')
-        st.plotly_chart(fig1, use_container_width=True)
-    with col2:
-        fig2 = px.scatter(filtro, x='indice_aproveitamento_maximo', y='altura_maxima', color='tipo_zona', title='Relação entre CA Máximo e Altura Máxima')
-        st.plotly_chart(fig2, use_container_width=True)
-    st.markdown("### 🌿 Zonas com Maior Permeabilidade Média")
-    fig3 = px.bar(estat.sort_values('taxa_permeabilidade', ascending=False), x='tipo_zona', y='taxa_permeabilidade', color='tipo_zona')
-    st.plotly_chart(fig3, use_container_width=True)
-else:
-    st.info("Ajuste os filtros para visualizar estatísticas e gráficos.")
-
-# --- EXPORTAÇÃO ---
-st.subheader("💾 Exportar Resultados Filtrados")
-col1, col2 = st.columns(2)
-
-csv_data = filtro.drop(columns='geometry').to_csv(index=False, encoding='utf-8-sig')
-geojson_data = filtro.to_json()
-
-with col1:
-    st.download_button("⬇️ Baixar CSV", data=csv_data, file_name="zonas_filtradas.csv", mime="text/csv")
-with col2:
-    st.download_button("🌐 Baixar GeoJSON", data=geojson_data, file_name="zonas_filtradas.geojson", mime="application/geo+json")
-
-# --- TABELA ---
-st.subheader("📋 Tabela de Zonas Filtradas")
-st.dataframe(filtro[[
-    'nome_zona', 'tipo_zona', 'indice_aproveitamento_basico', 'indice_aproveitamento_maximo',
-    'taxa_ocupacao_solo', 'taxa_permeabilidade', 'altura_maxima'
-]].reset_index(drop=True))
-
-st.markdown("Desenvolvido por **Cicero Mayk** • Powered by Streamlit + PostGIS + Folium + Plotly + OpenStreetMap")
+st.markdown("Desenvolvido por **Cicero Mayk** • Powered by Streamlit + Folium + OpenStreetMap")
