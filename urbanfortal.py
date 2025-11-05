@@ -57,14 +57,31 @@ st.sidebar.markdown(f"**Zonas encontradas:** {len(filtro)}")
 centro = [-3.730451, -38.521798]  # Fortaleza
 m = folium.Map(location=centro, zoom_start=12, tiles=base_mapa)
 
-# Adiciona outras camadas base alternáveis
-folium.TileLayer('OpenStreetMap').add_to(m)
-folium.TileLayer('Stamen Terrain').add_to(m)
-folium.TileLayer('Stamen Toner').add_to(m)
-folium.TileLayer('CartoDB positron').add_to(m)
-folium.TileLayer('Esri.WorldImagery', name='Esri Satellite').add_to(m)
+# Adiciona camadas base com atribuições oficiais
+folium.TileLayer('OpenStreetMap', name='OpenStreetMap', attr='© OpenStreetMap contributors').add_to(m)
+folium.TileLayer('CartoDB positron', name='CartoDB positron', attr='© OpenStreetMap contributors & CartoDB').add_to(m)
+
+folium.TileLayer(
+    tiles='https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg',
+    name='Stamen Terrain',
+    attr='Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors'
+).add_to(m)
+
+folium.TileLayer(
+    tiles='https://stamen-tiles.a.ssl.fastly.net/toner/{z}/{x}/{y}.png',
+    name='Stamen Toner',
+    attr='Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors'
+).add_to(m)
+
+folium.TileLayer(
+    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    name='Esri Satellite',
+    attr='Tiles © Esri — Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
+).add_to(m)
+
 folium.LayerControl().add_to(m)
 
+# Adicionar zonas filtradas
 for _, row in filtro.iterrows():
     if row.geometry is not None:
         geo_json = folium.GeoJson(
