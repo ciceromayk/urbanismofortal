@@ -4,8 +4,10 @@ import pandas as pd
 import folium
 import plotly.express as px
 import requests
+import json
 from shapely.geometry import Point
 from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 
 # --- CONFIGURAÇÕES INICIAIS ---
 st.set_page_config(page_title="Zoneamento Fortaleza", layout="wide")
@@ -54,7 +56,8 @@ base_mapa = st.sidebar.selectbox(
     ["CartoDB positron", "OpenStreetMap", "Stamen Terrain", "Stamen Toner", "Esri Satellite"]
 )
 
-modo_localizacao = st.sidebar.radio("Modo de Localização:", ["Buscar por Endereço", "Selecionar no Mapa"])
+modo_localizacao = st.sidebar.radio("Modo de Localização:", ["Buscar por Endereço", "Selecionar no Mapa"]) 
+modo_render = st.sidebar.selectbox("Motor de Renderização do Mapa:", ["Automático (st_folium)", "HTML (components)"])
 
 filtro = gdf.copy()
 if zona_tipo:
@@ -65,6 +68,23 @@ filtro = filtro[
 ]
 
 st.sidebar.markdown(f"**Zonas encontradas:** {len(filtro)}")
+
+# --- FUNÇÃO DE RENDERIZAÇÃO COM FALLBACK ---
+def renderizar_mapa_folium(mapa, height=700):
+    """Tenta renderizar via st_folium; se falhar, usa components.html."""
+    try:
+        return st_folium(
+            mapa,
+            width=1200,
+            height=height,
+            key="mapa_zoneamento",
+            returned_objects=[]
+        )
+    except Exception as e:
+        st.warning(f"st_folium falhou: {e}. Alternando para renderização HTML.")
+        html = mapa.get_root().render()
+        components.html(html, height=height)
+        return {}
 
 # --- MAPA BASE ---
 centro = [-3.730451, -38.521798]
@@ -130,18 +150,18 @@ if modo_localizacao == "Buscar por Endereço":
         except Exception as e:
             st.error(f"Erro ao consultar o endereço: {e}")
 
-# --- RENDERIZA MAPA ---
+# --- RENDERIZAÇÃO PRINCIPAL DO MAPA ---
 st.write(f"Renderizando mapa com {len(filtro)} zonas…")
-st_data = st_folium(
-    m,
-    width=1200,
-    height=700,
-    key="mapa_zoneamento",
-    returned_objects=[]
-)
+if modo_render == "Automático (st_folium)":
+    st_data = renderizar_mapa_folium(m, height=700)
+else:
+    # HTML (components)
+    html = m.get_root().render()
+    components.html(html, height=700)
+    st_data = {}
 
-# --- CLIQUE NO MAPA ---
-if modo_localizacao == "Selecionar no Mapa" and st_data and st_data.get("last_clicked"):
+# --- CLIQUE NO MAPA (apenas quando st_folium está ativo) ---
+if modo_render == "Automático (st_folium)" and st_data and st_data.get("last_clicked"):
     lat = st_data["last_clicked"]["lat"]
     lon = st_data["last_clicked"]["lng"]
     coord_busca = (lat, lon)
@@ -154,7 +174,7 @@ if modo_localizacao == "Selecionar no Mapa" and st_data and st_data.get("last_cl
     else:
         st.warning("Nenhuma zona encontrada nesse ponto.")
 
-# --- ADICIONA MARCADOR ---
+# --- ADICIONA MARCADOR E RE-RENDER ---
 if coord_busca:
     lat, lon = coord_busca
     popup_text = f"<b>Ponto Selecionado</b><br>Lat: {lat:.5f}, Lon: {lon:.5f}"
@@ -165,14 +185,10 @@ if coord_busca:
     m.location = [lat, lon]
     m.zoom_start = 15
 
-# --- RE-RENDER ÚNICO DO MAPA ---
-st_folium(
-    m,
-    width=1200,
-    height=700,
-    key="mapa_zoneamento_final",
-    returned_objects=[]
-)
+    if modo_render == "Automático (st_folium)":
+        renderizar_mapa_folium(m, height=700)
+    else:
+        components.html(m.get_root().render(), height=700)
 
 # --- ESTATÍSTICAS E GRÁFICOS ---
 st.subheader("📊 Estatísticas por Tipo de Zona")
