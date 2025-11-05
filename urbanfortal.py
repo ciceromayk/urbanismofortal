@@ -89,7 +89,9 @@ for _, row in filtro.iterrows():
         )
         geo_json.add_to(m)
 
-st_data = st_folium(m, width=1200, height=700)
+# Variável global para centralizar e marcar endereço buscado
+coord_busca = None
+info_zona_busca = None
 
 # --- BUSCA POR ENDEREÇO ---
 st.subheader("📍 Busca por Endereço (OpenStreetMap)")
@@ -101,11 +103,13 @@ if st.button("🔎 Localizar Endereço") and endereco:
         data = response.json()
         if data:
             lat, lon = float(data[0]['lat']), float(data[0]['lon'])
+            coord_busca = (lat, lon)
             st.success(f"📍 Endereço encontrado: ({lat:.5f}, {lon:.5f})")
             ponto = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
             zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
             if not zona_ponto.empty:
                 z = zona_ponto.iloc[0]
+                info_zona_busca = z
                 st.info(f"O endereço está na zona **{z['nome_zona']}** — Tipo: **{z['tipo_zona']}**")
                 st.json(z.to_dict())
             else:
@@ -114,6 +118,19 @@ if st.button("🔎 Localizar Endereço") and endereco:
             st.error("Endereço não encontrado. Verifique o texto digitado.")
     except Exception as e:
         st.error(f"Erro ao consultar o endereço: {e}")
+
+# --- Adicionar marcador do ponto buscado no mapa ---
+if coord_busca:
+    lat, lon = coord_busca
+    m.location = [lat, lon]
+    m.zoom_start = 15
+    popup_text = f"<b>Endereço buscado</b><br>Lat: {lat:.5f}, Lon: {lon:.5f}"
+    if info_zona_busca is not None:
+        popup_text += f"<br><b>Zona:</b> {info_zona_busca['nome_zona']}<br><b>Tipo:</b> {info_zona_busca['tipo_zona']}<br><b>CA Máx:</b> {info_zona_busca['indice_aproveitamento_maximo']}"
+    folium.Marker([lat, lon], popup=popup_text, icon=folium.Icon(color='red', icon='search')).add_to(m)
+
+# Renderiza mapa
+st_data = st_folium(m, width=1200, height=700)
 
 # --- ESTATÍSTICAS GERAIS ---
 st.subheader("📊 Estatísticas por Tipo de Zona")
