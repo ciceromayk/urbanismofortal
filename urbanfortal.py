@@ -2,6 +2,8 @@ import streamlit as st
 import geopandas as gpd
 import pandas as pd
 import folium
+import plotly.express as px
+import requests
 from shapely.geometry import Point
 from streamlit_folium import st_folium
 
@@ -60,25 +62,21 @@ m = folium.Map(location=centro, zoom_start=12, tiles=base_mapa)
 # Adiciona camadas base com atribuições oficiais
 folium.TileLayer('OpenStreetMap', name='OpenStreetMap', attr='© OpenStreetMap contributors').add_to(m)
 folium.TileLayer('CartoDB positron', name='CartoDB positron', attr='© OpenStreetMap contributors & CartoDB').add_to(m)
-
 folium.TileLayer(
     tiles='https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg',
     name='Stamen Terrain',
     attr='Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors'
 ).add_to(m)
-
 folium.TileLayer(
     tiles='https://stamen-tiles.a.ssl.fastly.net/toner/{z}/{x}/{y}.png',
     name='Stamen Toner',
     attr='Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors'
 ).add_to(m)
-
 folium.TileLayer(
     tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     name='Esri Satellite',
     attr='Tiles © Esri — Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
 ).add_to(m)
-
 folium.LayerControl().add_to(m)
 
 # Adicionar zonas filtradas
@@ -93,19 +91,29 @@ for _, row in filtro.iterrows():
 
 st_data = st_folium(m, width=1200, height=700)
 
-# --- BUSCA POR COORDENADA ---
-st.subheader("📍 Consulta por Coordenada")
-lat = st.number_input("Latitude:", value=-3.73, format="%.6f")
-lon = st.number_input("Longitude:", value=-38.52, format="%.6f")
-
-if st.button("Buscar Zona"):
-    ponto = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
-    zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
-    if not zona_ponto.empty:
-        st.success(f"O ponto está dentro da zona: **{zona_ponto.iloc[0]['nome_zona']}**")
-        st.json(zona_ponto.iloc[0].to_dict())
-    else:
-        st.warning("Nenhuma zona encontrada para as coordenadas informadas.")
+# --- BUSCA POR ENDEREÇO ---
+st.subheader("📍 Busca por Endereço (OpenStreetMap)")
+endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, Fortaleza")
+if st.button("🔎 Localizar Endereço") and endereco:
+    try:
+        url = f"https://nominatim.openstreetmap.org/search?q={endereco}, Fortaleza&format=json&limit=1"
+        response = requests.get(url, headers={'User-Agent': 'UrbanFortalApp/1.0'})
+        data = response.json()
+        if data:
+            lat, lon = float(data[0]['lat']), float(data[0]['lon'])
+            st.success(f"📍 Endereço encontrado: ({lat:.5f}, {lon:.5f})")
+            ponto = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
+            zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
+            if not zona_ponto.empty:
+                z = zona_ponto.iloc[0]
+                st.info(f"O endereço está na zona **{z['nome_zona']}** — Tipo: **{z['tipo_zona']}**")
+                st.json(z.to_dict())
+            else:
+                st.warning("Nenhuma zona encontrada para esse ponto.")
+        else:
+            st.error("Endereço não encontrado. Verifique o texto digitado.")
+    except Exception as e:
+        st.error(f"Erro ao consultar o endereço: {e}")
 
 # --- ESTATÍSTICAS GERAIS ---
 st.subheader("📊 Estatísticas por Tipo de Zona")
@@ -119,6 +127,25 @@ if not filtro.empty:
     st.dataframe(estat, use_container_width=True)
 else:
     st.info("Ajuste os filtros para visualizar estatísticas.")
+
+# --- PAINEL DE INDICADORES URBANÍSTICOS ---
+st.subheader("📈 Painel de Indicadores Urbanísticos")
+if not filtro.empty:
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig1 = px.bar(estat, x='tipo_zona', y='indice_aproveitamento_maximo', title='CA Máximo Médio por Tipo de Zona', color='tipo_zona')
+        st.plotly_chart(fig1, use_container_width=True)
+
+    with col2:
+        fig2 = px.scatter(filtro, x='indice_aproveitamento_maximo', y='altura_maxima', color='tipo_zona', title='Relação entre CA Máximo e Altura Máxima')
+        st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown("### 🌿 Zonas com Maior Permeabilidade Média")
+    fig3 = px.bar(estat.sort_values('taxa_permeabilidade', ascending=False), x='tipo_zona', y='taxa_permeabilidade', color='tipo_zona')
+    st.plotly_chart(fig3, use_container_width=True)
+else:
+    st.info("Nenhuma zona filtrada para gerar gráficos.")
 
 # --- EXPORTAÇÃO DE RESULTADOS ---
 st.subheader("💾 Exportar Resultados Filtrados")
@@ -140,4 +167,4 @@ st.dataframe(filtro[[
     'taxa_ocupacao_solo', 'taxa_permeabilidade', 'altura_maxima'
 ]].reset_index(drop=True))
 
-st.markdown("Desenvolvido por Cicero Mayk • Powered by Streamlit + PostGIS + Folium")
+st.markdown("Desenvolvido por Cicero Mayk • Powered by Streamlit + PostGIS + Folium + Plotly + OpenStreetMap")
