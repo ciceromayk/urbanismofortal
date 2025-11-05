@@ -41,6 +41,11 @@ ca_min, ca_max = st.sidebar.slider(
     step=0.1
 )
 
+base_mapa = st.sidebar.selectbox(
+    "Camada Base do Mapa:",
+    ["CartoDB positron", "OpenStreetMap", "Stamen Terrain", "Stamen Toner", "Esri Satellite"]
+)
+
 filtro = gdf.copy()
 if zona_tipo:
     filtro = filtro[filtro['tipo_zona'].isin(zona_tipo)]
@@ -50,7 +55,15 @@ st.sidebar.markdown(f"**Zonas encontradas:** {len(filtro)}")
 
 # --- MAPA INTERATIVO ---
 centro = [-3.730451, -38.521798]  # Fortaleza
-m = folium.Map(location=centro, zoom_start=12, tiles="CartoDB positron")
+m = folium.Map(location=centro, zoom_start=12, tiles=base_mapa)
+
+# Adiciona outras camadas base alternáveis
+folium.TileLayer('OpenStreetMap').add_to(m)
+folium.TileLayer('Stamen Terrain').add_to(m)
+folium.TileLayer('Stamen Toner').add_to(m)
+folium.TileLayer('CartoDB positron').add_to(m)
+folium.TileLayer('Esri.WorldImagery', name='Esri Satellite').add_to(m)
+folium.LayerControl().add_to(m)
 
 for _, row in filtro.iterrows():
     if row.geometry is not None:
