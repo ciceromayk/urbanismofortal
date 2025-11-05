@@ -85,8 +85,11 @@ def adicionar_interatividade():
 # --- DESTAQUE DE ZONA E PIN ---
 def destacar_zona(lat, lon, zona_geojson, info_zona_busca):
     if info_zona_busca is not None and zona_geojson:
-        area_ha = info_zona_busca.geometry.to_crs(3857).area / 10000
-        perimetro_m = info_zona_busca.geometry.to_crs(3857).length
+        # Cria GeoDataFrame temporário para reprojeção
+        geom_gdf = gpd.GeoDataFrame(index=[0], crs="EPSG:4326", geometry=[info_zona_busca.geometry])
+        geom_gdf_3857 = geom_gdf.to_crs(epsg=3857)
+        area_ha = geom_gdf_3857.area.iloc[0] / 10000
+        perimetro_m = geom_gdf_3857.length.iloc[0]
 
         folium.GeoJson(
             zona_geojson,
