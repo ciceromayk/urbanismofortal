@@ -2,11 +2,9 @@ import streamlit as st
 import geopandas as gpd
 import pandas as pd
 import folium
-import plotly.express as px
 import requests
-import json
 from shapely.geometry import Point
-from streamlit_folium import st_folium # Importação otimizada
+from streamlit_folium import st_folium # Importação otimizada para interatividade
 
 # --- CONFIGURAÇÕES INICIAIS ---
 st.set_page_config(page_title="Zoneamento Fortaleza", layout="wide")
@@ -24,7 +22,8 @@ CRS_METRIC = "EPSG:3857" # Para cálculos de área e perímetro em metros
 def carregar_dados():
     """Carrega dados geoespaciais do CSV com cache."""
     try:
-        df = pd.read_csv("zoneamento_fortaleza.csv")
+        # Nota: O arquivo zoneamento_fortaleza.csv deve estar na mesma pasta
+        df = pd.read_csv("zoneamento_fortaleza.csv") 
         gdf = gpd.GeoDataFrame(
             df.drop(columns=['wkt_multipolygon']),
             geometry=gpd.GeoSeries.from_wkt(df['wkt_multipolygon']),
@@ -39,36 +38,38 @@ gdf = carregar_dados()
 if gdf is None:
     st.stop()
 
-# --- FUNÇÃO AUXILIAR: EXIBIR INFORMAÇÕES DA ZONA ---
+# --- SIDEBAR PARA INFORMAÇÕES E PARÂMETROS URBANÍSTICOS ---
+with st.sidebar:
+    st.title("Parâmetros Urbanísticos")
+    sidebar_placeholder = st.empty() # Placeholder para conteúdo dinâmico da zona
+    
+# --- FUNÇÃO AUXILIAR: EXIBIR INFORMAÇÕES DA ZONA NO SIDEBAR ---
 def exibir_info_zona(zona_encontrada):
-    """Exibe as informações tabulares e formatadas da zona no sidebar."""
+    """Exibe as informações tabulares e formatadas da zona no placeholder do sidebar."""
     if not zona_encontrada.empty:
         z = zona_encontrada.iloc[0]
-        st.subheader(f"Zona Encontrada: {z['nome_zona']}")
         
         # Cálculos Geográficos
         area_ha = z.geometry.to_crs(CRS_METRIC).area / 10000
         perimetro_m = z.geometry.to_crs(CRS_METRIC).length
 
-        # Exibição de Parâmetros
-        st.write(f"**Tipo de Zona:** {z['tipo_zona']}")
-        st.write(f"**Área:** {area_ha:.2f} ha")
-        st.write(f"**Perímetro:** {perimetro_m:.0f} m")
-        
-        # Parâmetros Urbanísticos (Tabela)
-        params = pd.DataFrame({
-            'Parâmetro': ['CA Básico', 'CA Máximo', 'TO Solo', 'TO Subsolo', 'Altura Máxima', 'Permeabilidade'],
-            'Valor': [z['indice_aproveitamento_basico'], z['indice_aproveitamento_maximo'], z['taxa_ocupacao_solo'], z['taxa_ocupacao_subsolo'], z['altura_maxima'], z['taxa_permeabilidade']]
-        }).set_index('Parâmetro')
-        st.dataframe(params)
+        # Conteúdo a ser renderizado no sidebar
+        with sidebar_placeholder.container():
+            st.markdown("---")
+            st.subheader(f"Zona: {z['nome_zona']}")
+            st.write(f"**Tipo de Zona:** {z['tipo_zona']}")
+            st.markdown(f"**Geometria:**<br>Área: **{area_ha:.2f} ha**<br>Perímetro: **{perimetro_m:.0f} m**", unsafe_allow_html=True)
+            
+            # Parâmetros Urbanísticos (Tabela)
+            params = pd.DataFrame({
+                'Parâmetro': ['CA Básico', 'CA Máximo', 'TO Solo', 'TO Subsolo', 'Altura Máxima', 'Permeabilidade'],
+                'Valor': [z['indice_aproveitamento_basico'], z['indice_aproveitamento_maximo'], z['taxa_ocupacao_solo'], z['taxa_ocupacao_subsolo'], z['altura_maxima'], z['taxa_permeabilidade']]
+            }).set_index('Parâmetro')
+            st.dataframe(params)
         
         return z, z.geometry.__geo_interface__
     return None, None
 
-# --- SIDEBAR PARA INFORMAÇÕES E PARÂMETROS URBANÍSTICOS ---
-with st.sidebar:
-    st.title("Parâmetros Urbanísticos")
-    
 # --- INTERFACE DE BUSCA ---
 st.subheader("📍 Buscar Endereço")
 endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, 2000")
@@ -77,6 +78,8 @@ zona_geojson = None
 info_zona_busca = None
 
 if st.button("🔎 Localizar Endereço") and endereco:
+    # Limpa o placeholder do sidebar em nova busca
+    sidebar_placeholder.empty() 
     try:
         url = f"https://nominatim.openstreetmap.org/search?q={endereco}, Fortaleza&format=json&limit=1"
         response = requests.get(url, headers={'User-Agent': 'UrbanFortalApp/1.0'})
@@ -90,7 +93,7 @@ if st.button("🔎 Localizar Endereço") and endereco:
 
             if not zona_ponto.empty:
                 st.success(f"📍 Endereço encontrado.")
-                # Passa a zona encontrada para ser exibida no sidebar
+                # CHAMA A FUNÇÃO PARA EXIBIR INFORMAÇÕES NO SIDEBAR
                 info_zona_busca, zona_geojson = exibir_info_zona(zona_ponto)
             else:
                 st.warning("Endereço encontrado, mas fora de qualquer zona definida.")
@@ -99,6 +102,7 @@ if st.button("🔎 Localizar Endereço") and endereco:
             
     except Exception as e:
         st.error(f"Erro ao consultar o endereço: {e}")
+        sidebar_placeholder.empty()
 
 # --- MAPA BASE ---
 m = folium.Map(location=CENTRO_FORTALEZA, zoom_start=12, tiles='CartoDB positron')
@@ -112,7 +116,7 @@ for _, row in gdf.iterrows():
             row.geometry.__geo_interface__,
             tooltip=tooltip_text,
             name=row['nome_zona'],
-            style_function=lambda x, name=row['nome_zona']: {
+            style_function=lambda x: {
                 'fillColor': '#A0A0A0', # Cor cinza suave para a base
                 'color': '#808080',
                 'weight': 1,
@@ -144,27 +148,25 @@ if coord_busca and zona_geojson:
 
 # --- RENDERIZAÇÃO INTERATIVA COM STREAMLIT-FOLIUM ---
 st.subheader("Mapa Interativo")
-# st_folium permite que dados do clique retornem para o Streamlit
+st.markdown("**🖱️ Dica:** clique em qualquer ponto do mapa para identificar a zona correspondente.")
 map_data = st_folium(m, height=700, width=None, returned_objects=["last_clicked"])
 
 # --- TRATAMENTO DE CLIQUE NO MAPA ---
 if map_data and map_data.get("last_clicked"):
+    # Limpa o placeholder do sidebar ao clicar no mapa
+    sidebar_placeholder.empty()
     clicked_lat = map_data["last_clicked"]["lat"]
     clicked_lon = map_data["last_clicked"]["lng"]
-    st.info(f"Coordenadas do clique: Lat: {clicked_lat:.5f}, Lon: {clicked_lon:.5f}")
 
     # Realiza a consulta espacial para o ponto clicado
     ponto_clicado = gpd.GeoSeries([Point(clicked_lon, clicked_lat)], crs=CRS_GEO)
     zona_ponto_clicado = gdf[gdf.contains(ponto_clicado.iloc[0])]
 
     if not zona_ponto_clicado.empty:
-        with st.sidebar:
-            st.markdown("---")
-            st.subheader("Informações do Ponto Clicado")
-            # Reutiliza a função de exibição para o clique
-            exibir_info_zona(zona_ponto_clicado)
+        # CHAMA A FUNÇÃO PARA EXIBIR INFORMAÇÕES NO SIDEBAR
+        exibir_info_zona(zona_ponto_clicado)
     else:
-        with st.sidebar:
+        with sidebar_placeholder.container():
             st.markdown("---")
             st.warning("Ponto clicado fora de uma zona definida.")
 
