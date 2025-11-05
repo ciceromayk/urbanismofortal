@@ -49,9 +49,13 @@ def exibir_info_zona(zona_encontrada):
     if not zona_encontrada.empty:
         z = zona_encontrada.iloc[0]
         
-        # Cálculos Geográficos
-        area_ha = z.geometry.to_crs(CRS_METRIC).area / 10000
-        perimetro_m = z.geometry.to_crs(CRS_METRIC).length
+        # CÁLCULOS GEOGRÁFICOS: (CORREÇÃO DO AttributeError)
+        # 1. Projeta a GeoDataFrame de uma linha para o CRS métrico
+        zona_proj = zona_encontrada.to_crs(CRS_METRIC)
+        
+        # 2. Acessa os valores escalares de área e perímetro da GeoDataFrame projetada
+        area_ha = zona_proj.area.iloc[0] / 10000
+        perimetro_m = zona_proj.length.iloc[0]
 
         # Conteúdo a ser renderizado no sidebar
         with sidebar_placeholder.container():
