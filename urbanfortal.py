@@ -56,7 +56,7 @@ base_mapa = st.sidebar.selectbox(
     ["CartoDB positron", "OpenStreetMap", "Stamen Terrain", "Stamen Toner", "Esri Satellite"]
 )
 
-modo_localizacao = st.sidebar.radio("Modo de Localização:", ["Buscar por Endereço", "Selecionar no Mapa"]) 
+modo_localizacao = st.sidebar.radio("Modo de Localização:", ["Buscar por Endereço", "Selecionar no Mapa"])
 modo_render = st.sidebar.selectbox("Motor de Renderização do Mapa:", ["Automático (st_folium)", "HTML (components)"])
 
 filtro = gdf.copy()
@@ -69,17 +69,10 @@ filtro = filtro[
 
 st.sidebar.markdown(f"**Zonas encontradas:** {len(filtro)}")
 
-# --- FUNÇÃO DE RENDERIZAÇÃO COM FALLBACK ---
+# --- FUNÇÃO DE RENDERIZAÇÃO ---
 def renderizar_mapa_folium(mapa, height=700):
-    """Tenta renderizar via st_folium; se falhar, usa components.html."""
     try:
-        return st_folium(
-            mapa,
-            width=1200,
-            height=height,
-            key="mapa_zoneamento",
-            returned_objects=[]
-        )
+        return st_folium(mapa, width=1200, height=height, key="mapa_zoneamento", returned_objects=[])
     except Exception as e:
         st.warning(f"st_folium falhou: {e}. Alternando para renderização HTML.")
         html = mapa.get_root().render()
@@ -110,7 +103,7 @@ folium.TileLayer(
 ).add_to(m)
 folium.LayerControl().add_to(m)
 
-# --- ADICIONA POLÍGONOS ---
+# --- ADICIONA POLÍGONOS FILTRADOS ---
 for _, row in filtro.iterrows():
     if row.geometry is not None:
         folium.GeoJson(
@@ -126,6 +119,7 @@ for _, row in filtro.iterrows():
 st.subheader("📍 Localização")
 coord_busca = None
 info_zona_busca = None
+zona_geojson = None
 
 if modo_localizacao == "Buscar por Endereço":
     endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, Fortaleza")
@@ -142,6 +136,7 @@ if modo_localizacao == "Buscar por Endereço":
                 if not zona_ponto.empty:
                     z = zona_ponto.iloc[0]
                     info_zona_busca = z
+                    zona_geojson = z.geometry.__geo_interface__
                     st.success(f"📍 Endereço dentro da zona: **{z['nome_zona']}** — Tipo: **{z['tipo_zona']}**")
                 else:
                     st.warning("Endereço encontrado, mas fora de qualquer zona definida.")
@@ -155,12 +150,11 @@ st.write(f"Renderizando mapa com {len(filtro)} zonas…")
 if modo_render == "Automático (st_folium)":
     st_data = renderizar_mapa_folium(m, height=700)
 else:
-    # HTML (components)
     html = m.get_root().render()
     components.html(html, height=700)
     st_data = {}
 
-# --- CLIQUE NO MAPA (apenas quando st_folium está ativo) ---
+# --- CLIQUE NO MAPA ---
 if modo_render == "Automático (st_folium)" and st_data and st_data.get("last_clicked"):
     lat = st_data["last_clicked"]["lat"]
     lon = st_data["last_clicked"]["lng"]
@@ -170,18 +164,36 @@ if modo_render == "Automático (st_folium)" and st_data and st_data.get("last_cl
     if not zona_ponto.empty:
         z = zona_ponto.iloc[0]
         info_zona_busca = z
+        zona_geojson = z.geometry.__geo_interface__
         st.success(f"📍 Ponto dentro da zona: **{z['nome_zona']}** — Tipo: **{z['tipo_zona']}**")
     else:
         st.warning("Nenhuma zona encontrada nesse ponto.")
 
-# --- ADICIONA MARCADOR E RE-RENDER ---
+# --- DESTAQUE DA ZONA E PIN ---
 if coord_busca:
     lat, lon = coord_busca
+    color = 'red' if modo_localizacao == "Buscar por Endereço" else 'blue'
     popup_text = f"<b>Ponto Selecionado</b><br>Lat: {lat:.5f}, Lon: {lon:.5f}"
     if info_zona_busca is not None:
         popup_text += f"<br><b>Zona:</b> {info_zona_busca['nome_zona']}<br><b>Tipo:</b> {info_zona_busca['tipo_zona']}<br><b>CA Máx:</b> {info_zona_busca['indice_aproveitamento_maximo']}"
-    color = 'red' if modo_localizacao == "Buscar por Endereço" else 'blue'
-    folium.Marker([lat, lon], popup=popup_text, icon=folium.Icon(color=color, icon='map-marker')).add_to(m)
+        if zona_geojson:
+            folium.GeoJson(
+                zona_geojson,
+                name="Zona Selecionada",
+                style_function=lambda x: {
+                    'fillColor': 'yellow',
+                    'color': 'red',
+                    'weight': 4,
+                    'fillOpacity': 0.15
+                },
+                tooltip=info_zona_busca['nome_zona']
+            ).add_to(m)
+
+    folium.Marker(
+        [lat, lon],
+        popup=popup_text,
+        icon=folium.Icon(color=color, icon='map-marker')
+    ).add_to(m)
     m.location = [lat, lon]
     m.zoom_start = 15
 
