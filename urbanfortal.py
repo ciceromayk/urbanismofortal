@@ -93,4 +93,129 @@ folium.LayerControl().add_to(m)
 # --- ADICIONA POLÍGONOS ---
 for _, row in filtro.iterrows():
     if row.geometry is not None:
-        foliu
+        folium.GeoJson(
+            row.geometry.__geo_interface__,
+            tooltip=row['nome_zona'],
+            popup=folium.Popup(
+                f"<b>{row['nome_zona']}</b><br>CA Máx: {row['indice_aproveitamento_maximo']}<br>TO: {row['taxa_ocupacao_solo']}<br>Altura Máx: {row['altura_maxima']}",
+                max_width=300
+            )
+        ).add_to(m)
+
+# --- LOCALIZAÇÃO ---
+st.subheader("📍 Localização")
+coord_busca = None
+info_zona_busca = None
+
+if modo_localizacao == "Buscar por Endereço":
+    endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, Fortaleza")
+    if st.button("🔎 Localizar Endereço") and endereco:
+        try:
+            url = f"https://nominatim.openstreetmap.org/search?q={endereco}, Fortaleza&format=json&limit=1"
+            response = requests.get(url, headers={'User-Agent': 'UrbanFortalApp/1.0'})
+            data = response.json()
+            if data:
+                lat, lon = float(data[0]['lat']), float(data[0]['lon'])
+                coord_busca = (lat, lon)
+                ponto = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
+                zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
+                if not zona_ponto.empty:
+                    z = zona_ponto.iloc[0]
+                    info_zona_busca = z
+                    st.success(f"📍 Endereço dentro da zona: **{z['nome_zona']}** — Tipo: **{z['tipo_zona']}**")
+                else:
+                    st.warning("Endereço encontrado, mas fora de qualquer zona definida.")
+            else:
+                st.error("Endereço não encontrado. Verifique o texto digitado.")
+        except Exception as e:
+            st.error(f"Erro ao consultar o endereço: {e}")
+
+# --- RENDERIZA MAPA ---
+st.write(f"Renderizando mapa com {len(filtro)} zonas…")
+st_data = st_folium(
+    m,
+    width=1200,
+    height=700,
+    key="mapa_zoneamento",
+    returned_objects=[]
+)
+
+# --- CLIQUE NO MAPA ---
+if modo_localizacao == "Selecionar no Mapa" and st_data and st_data.get("last_clicked"):
+    lat = st_data["last_clicked"]["lat"]
+    lon = st_data["last_clicked"]["lng"]
+    coord_busca = (lat, lon)
+    ponto = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
+    zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
+    if not zona_ponto.empty:
+        z = zona_ponto.iloc[0]
+        info_zona_busca = z
+        st.success(f"📍 Ponto dentro da zona: **{z['nome_zona']}** — Tipo: **{z['tipo_zona']}**")
+    else:
+        st.warning("Nenhuma zona encontrada nesse ponto.")
+
+# --- ADICIONA MARCADOR ---
+if coord_busca:
+    lat, lon = coord_busca
+    popup_text = f"<b>Ponto Selecionado</b><br>Lat: {lat:.5f}, Lon: {lon:.5f}"
+    if info_zona_busca is not None:
+        popup_text += f"<br><b>Zona:</b> {info_zona_busca['nome_zona']}<br><b>Tipo:</b> {info_zona_busca['tipo_zona']}<br><b>CA Máx:</b> {info_zona_busca['indice_aproveitamento_maximo']}"
+    color = 'red' if modo_localizacao == "Buscar por Endereço" else 'blue'
+    folium.Marker([lat, lon], popup=popup_text, icon=folium.Icon(color=color, icon='map-marker')).add_to(m)
+    m.location = [lat, lon]
+    m.zoom_start = 15
+
+# --- RE-RENDER ÚNICO DO MAPA ---
+st_folium(
+    m,
+    width=1200,
+    height=700,
+    key="mapa_zoneamento_final",
+    returned_objects=[]
+)
+
+# --- ESTATÍSTICAS E GRÁFICOS ---
+st.subheader("📊 Estatísticas por Tipo de Zona")
+if not filtro.empty:
+    estat = filtro.groupby('tipo_zona').agg({
+        'indice_aproveitamento_maximo': 'mean',
+        'taxa_ocupacao_solo': 'mean',
+        'taxa_permeabilidade': 'mean',
+        'altura_maxima': 'mean'
+    }).round(2).reset_index()
+    st.dataframe(estat, use_container_width=True)
+
+    st.subheader("📈 Painel de Indicadores Urbanísticos")
+    col1, col2 = st.columns(2)
+    with col1:
+        fig1 = px.bar(estat, x='tipo_zona', y='indice_aproveitamento_maximo', title='CA Máximo Médio por Tipo de Zona', color='tipo_zona')
+        st.plotly_chart(fig1, use_container_width=True)
+    with col2:
+        fig2 = px.scatter(filtro, x='indice_aproveitamento_maximo', y='altura_maxima', color='tipo_zona', title='Relação entre CA Máximo e Altura Máxima')
+        st.plotly_chart(fig2, use_container_width=True)
+    st.markdown("### 🌿 Zonas com Maior Permeabilidade Média")
+    fig3 = px.bar(estat.sort_values('taxa_permeabilidade', ascending=False), x='tipo_zona', y='taxa_permeabilidade', color='tipo_zona')
+    st.plotly_chart(fig3, use_container_width=True)
+else:
+    st.info("Ajuste os filtros para visualizar estatísticas e gráficos.")
+
+# --- EXPORTAÇÃO ---
+st.subheader("💾 Exportar Resultados Filtrados")
+col1, col2 = st.columns(2)
+
+csv_data = filtro.drop(columns='geometry').to_csv(index=False, encoding='utf-8-sig')
+geojson_data = filtro.to_json()
+
+with col1:
+    st.download_button("⬇️ Baixar CSV", data=csv_data, file_name="zonas_filtradas.csv", mime="text/csv")
+with col2:
+    st.download_button("🌐 Baixar GeoJSON", data=geojson_data, file_name="zonas_filtradas.geojson", mime="application/geo+json")
+
+# --- TABELA ---
+st.subheader("📋 Tabela de Zonas Filtradas")
+st.dataframe(filtro[[
+    'nome_zona', 'tipo_zona', 'indice_aproveitamento_basico', 'indice_aproveitamento_maximo',
+    'taxa_ocupacao_solo', 'taxa_permeabilidade', 'altura_maxima'
+]].reset_index(drop=True))
+
+st.markdown("Desenvolvido por **Cicero Mayk** • Powered by Streamlit + PostGIS + Folium + Plotly + OpenStreetMap")
