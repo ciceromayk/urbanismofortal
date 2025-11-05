@@ -2,11 +2,9 @@ import streamlit as st
 import geopandas as gpd
 import pandas as pd
 import folium
-import plotly.express as px
-import requests
-import json
 from shapely.geometry import Point
-import streamlit.components.v1 as components
+from streamlit_folium import st_folium
+import requests
 
 # --- CONFIGURAÇÕES INICIAIS ---
 st.set_page_config(page_title="Zoneamento Fortaleza", layout="wide")
@@ -78,21 +76,19 @@ for _, row in gdf.iterrows():
             )
         ).add_to(m)
 
-# --- CLIQUE NO MAPA ---
-def adicionar_interatividade():
-    components.html(m.get_root().render(), height=700)
-
-# --- DESTAQUE DE ZONA E PIN ---
-def destacar_zona(lat, lon, zona_geojson, info_zona_busca):
-    if info_zona_busca is not None and zona_geojson:
-        # Cria GeoDataFrame temporário para reprojeção
-        geom_gdf = gpd.GeoDataFrame(index=[0], crs="EPSG:4326", geometry=[info_zona_busca.geometry])
+# --- FUNÇÃO DESTACAR ZONA ---
+def destacar_zona(lat, lon, gdf):
+    ponto = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
+    zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
+    if not zona_ponto.empty:
+        z = zona_ponto.iloc[0]
+        geom_gdf = gpd.GeoDataFrame(index=[0], crs="EPSG:4326", geometry=[z.geometry])
         geom_gdf_3857 = geom_gdf.to_crs(epsg=3857)
         area_ha = geom_gdf_3857.area.iloc[0] / 10000
         perimetro_m = geom_gdf_3857.length.iloc[0]
 
         folium.GeoJson(
-            zona_geojson,
+            z.geometry.__geo_interface__,
             name="Zona Selecionada",
             style_function=lambda x: {
                 'fillColor': 'yellow',
@@ -100,32 +96,38 @@ def destacar_zona(lat, lon, zona_geojson, info_zona_busca):
                 'weight': 4,
                 'fillOpacity': 0.15
             },
-            tooltip=f"{info_zona_busca['nome_zona']}<br>Área: {area_ha:.2f} ha | Perímetro: {perimetro_m:.0f} m | ID: {info_zona_busca.name}"
+            tooltip=f"{z['nome_zona']}<br>Área: {area_ha:.2f} ha | Perímetro: {perimetro_m:.0f} m | ID: {z.name}"
         ).add_to(m)
 
         popup_text = (
-            f"<b>Zona:</b> {info_zona_busca['nome_zona']}<br>"
-            f"<b>Tipo:</b> {info_zona_busca['tipo_zona']}<br>"
-            f"<b>CA Máx:</b> {info_zona_busca['indice_aproveitamento_maximo']}<br>"
+            f"<b>Zona:</b> {z['nome_zona']}<br>"
+            f"<b>Tipo:</b> {z['tipo_zona']}<br>"
+            f"<b>CA Máx:</b> {z['indice_aproveitamento_maximo']}<br>"
             f"<b>Área:</b> {area_ha:.2f} ha<br>"
             f"<b>Perímetro:</b> {perimetro_m:.0f} m<br>"
-            f"<b>ID:</b> {info_zona_busca.name}"
+            f"<b>ID:</b> {z.name}"
         )
-
         folium.Marker([lat, lon], popup=popup_text, icon=folium.Icon(color='red', icon='map-marker')).add_to(m)
-        m.location = [lat, lon]
-        m.zoom_start = 15
-
-# --- SE HOUVER BUSCA ---
-if coord_busca and zona_geojson:
-    lat, lon = coord_busca
-    destacar_zona(lat, lon, zona_geojson, info_zona_busca)
+        return True
+    return False
 
 # --- MAPA INTERATIVO ---
-components.html(m.get_root().render(), height=700)
+st.write("🗺️ Clique em qualquer ponto do mapa ou busque um endereço para identificar a zona.")
+st_data = st_folium(m, width=1200, height=700, key="mapa_zoneamento")
 
-# --- INSTRUÇÕES DE CLIQUE ---
-st.markdown("**🖱️ Dica:** clique em qualquer ponto do mapa para identificar a zona correspondente.")
-st.info("O modo de clique está ativo automaticamente e o mapa é renderizado via HTML para compatibilidade total.")
+# --- TRATAR CLIQUE ---
+if st_data and st_data.get("last_clicked"):
+    lat = st_data["last_clicked"]["lat"]
+    lon = st_data["last_clicked"]["lng"]
+    if destacar_zona(lat, lon, gdf):
+        st.success(f"🖱️ Zona identificada no clique! Lat: {lat:.5f}, Lon: {lon:.5f}")
+    else:
+        st.warning("Nenhuma zona encontrada neste ponto.")
+
+# --- SE BUSCA POR ENDEREÇO ---
+if coord_busca:
+    lat, lon = coord_busca
+    if destacar_zona(lat, lon, gdf):
+        st.info(f"📍 Endereço plotado no mapa (Lat: {lat:.5f}, Lon: {lon:.5f})")
 
 st.markdown("Desenvolvido por **Cicero Mayk** • Powered by Streamlit + Folium + OpenStreetMap")
