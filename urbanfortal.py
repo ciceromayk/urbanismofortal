@@ -152,8 +152,15 @@ if coord_busca:
     m.location = [lat, lon]
     m.zoom_start = 15
 
-# --- RE-RENDER MAPA COM MARCADORES ---
-st_data = st_folium(m, width=1200, height=700)
+# --- RENDERIZAÇÃO ÚNICA DO MAPA ---
+st.write(f"Renderizando mapa com {len(filtro)} zonas...")
+st_data = st_folium(
+    m,
+    width=1200,
+    height=700,
+    key="mapa_zoneamento",
+    returned_objects=[]
+)
 
 # --- ESTATÍSTICAS E GRÁFICOS ---
 st.subheader("📊 Estatísticas por Tipo de Zona")
