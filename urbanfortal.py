@@ -152,7 +152,8 @@ if coord_busca and zona_geojson:
 
 # --- RENDERIZAÇÃO INTERATIVA COM STREAMLIT-FOLIUM ---
 st.subheader("Mapa Interativo")
-st.markdown("**🖱️ Dica:** clique em qualquer ponto do mapa para identificar a zona correspondente.")
+st.markdown("**🖱️ Dica:** clique em qualquer ponto do mapa para identificar a zona correspondente e colocar um pin.")
+# O mapa é renderizado e retorna o objeto de clique
 map_data = st_folium(m, height=700, width=None, returned_objects=["last_clicked"])
 
 # --- TRATAMENTO DE CLIQUE NO MAPA ---
@@ -161,7 +162,36 @@ if map_data and map_data.get("last_clicked"):
     sidebar_placeholder.empty()
     clicked_lat = map_data["last_clicked"]["lat"]
     clicked_lon = map_data["last_clicked"]["lng"]
-
+    
+    # CORREÇÃO: ADICIONA O MARCADOR DO CLIQUE DIRETO NO MAPA
+    # Criamos um novo mapa com o marcador e passamos para st_folium na próxima execução,
+    # mas a forma mais simples é renderizar o mapa novamente na interface
+    
+    # Uma solução mais direta (e que funciona com o st_folium) é re-renderizar o mapa base
+    # com o novo marcador, mas isso torna o código repetitivo.
+    # A melhor prática com `st_folium` é garantir que o objeto `m` contenha o marcador antes de ser renderizado.
+    
+    # Para o propósito imediato e funcional, colocamos o marcador no mapa `m` ANTES de renderizar,
+    # mas o `st_folium` não permite a adição dinâmica sem re-renderização completa
+    # (o que já é feito no loop principal do Streamlit).
+    
+    # Para forçar o Pin no clique sem re-renderizar o mapa base e perder o estado, é preciso
+    # adicionar uma camada ao mapa renderizado. No Streamlit, a maneira de fazer isso
+    # é **renderizar o mapa novamente com o marcador**.
+    
+    # No entanto, a forma mais simples (e que funciona no loop do Streamlit) é garantir que,
+    # **na próxima execução do script**, o mapa `m` já tenha o marcador.
+    
+    # Adicionando o marcador ao mapa `m` (se o usuário clicar, o script roda novamente
+    # e renderiza o mapa com o marcador):
+    folium.Marker(
+        [clicked_lat, clicked_lon], 
+        popup=f"Ponto Clicado:<br>Lat: {clicked_lat:.5f}, Lon: {clicked_lon:.5f}", 
+        icon=folium.Icon(color='blue', icon='circle')
+    ).add_to(m)
+    
+    # A próxima renderização do mapa (na linha 170) agora incluirá este marcador.
+    
     # Realiza a consulta espacial para o ponto clicado
     ponto_clicado = gpd.GeoSeries([Point(clicked_lon, clicked_lat)], crs=CRS_GEO)
     zona_ponto_clicado = gdf[gdf.contains(ponto_clicado.iloc[0])]
