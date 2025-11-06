@@ -4,7 +4,7 @@ import pandas as pd
 import folium
 import requests
 from shapely.geometry import Point
-from streamlit_folium import st_folium # Importação otimizada para interatividade
+from streamlit_folium import st_folium
 
 # --- CONFIGURAÇÕES INICIAIS ---
 st.set_page_config(page_title="Zoneamento Fortaleza", layout="wide")
@@ -70,17 +70,17 @@ def exibir_info_zona(zona_encontrada):
             st.write(f"**Tipo de Zona:** {z['tipo_zona']}")
             st.markdown(f"**Geometria:**<br>Área: **{area_ha:.2f} ha**<br>Perímetro: **{perimetro_m:.0f} m**", unsafe_allow_html=True)
             
-            # Parâmetros Urbanísticos (Tabela)
+            # Parâmetros Urbanísticos (Tabela) - ESSENCIAL PARA O REQUISITO DO USUÁRIO
             params = pd.DataFrame({
                 'Parâmetro': ['CA Básico', 'CA Máximo', 'TO Solo', 'TO Subsolo', 'Altura Máxima', 'Permeabilidade'],
                 'Valor': [z['indice_aproveitamento_basico'], z['indice_aproveitamento_maximo'], z['taxa_ocupacao_solo'], z['taxa_ocupacao_subsolo'], z['altura_maxima'], z['taxa_permeabilidade']]
             }).set_index('Parâmetro')
-            st.dataframe(params)
+            st.dataframe(params) # <-- Os parâmetros são exibidos aqui
         
         return z, z.geometry.__geo_interface__
     return None, None
 
-# --- INTERFACE DE BUSCA (ATUALIZADA PARA USAR O ESTADO) ---
+# --- INTERFACE DE BUSCA ---
 st.subheader("📍 Buscar Endereço")
 endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, 2000")
 
@@ -140,13 +140,12 @@ for _, row in gdf.iterrows():
         ).add_to(m)
 
 # --- DESTAQUE DA ZONA SELECIONADA (UNIFICADO) ---
-# Esta seção agora verifica o st.session_state, garantindo o mesmo visual para Busca e Clique
 if st.session_state.last_selection_coords and st.session_state.last_selection_geojson:
     lat, lon = st.session_state.last_selection_coords
     info_zona = st.session_state.last_selection_info
     geojson = st.session_state.last_selection_geojson
     
-    # 1. Adiciona o destaque (highlight) da zona
+    # 1. Adiciona o destaque (highlight) da zona (contorno vermelho e preenchimento amarelo)
     folium.GeoJson(
         geojson,
         name="Zona Selecionada",
@@ -159,20 +158,18 @@ if st.session_state.last_selection_coords and st.session_state.last_selection_ge
         tooltip=info_zona['nome_zona']
     ).add_to(m)
     
-    # 2. Adiciona o marcador (pin)
+    # 2. Adiciona o marcador (pin vermelho)
     folium.Marker([lat, lon], popup=f"Ponto Selecionado:<br>{info_zona['nome_zona']}", icon=folium.Icon(color='red', icon='map-marker')).add_to(m)
     
-    # Se a seleção foi recente, centraliza o mapa (opcional, pode ser removido)
     m.location = [lat, lon]
     m.zoom_start = 15
 
 # --- RENDERIZAÇÃO INTERATIVA COM STREAMLIT-FOLIUM ---
 st.subheader("Mapa Interativo")
 st.markdown("**🖱️ Dica:** clique em qualquer ponto do mapa para identificar a zona correspondente e colocar um pin.")
-# O mapa é renderizado e retorna o objeto de clique
 map_data = st_folium(m, height=700, width=None, returned_objects=["last_clicked"])
 
-# --- TRATAMENTO DE CLIQUE NO MAPA (ATUALIZADO PARA USAR O ESTADO) ---
+# --- TRATAMENTO DE CLIQUE NO MAPA ---
 if map_data and map_data.get("last_clicked"):
     # 1. Resetar o estado da seleção anterior (se for um novo clique)
     st.session_state.last_selection_coords = None
@@ -188,8 +185,8 @@ if map_data and map_data.get("last_clicked"):
     zona_ponto_clicado = gdf[gdf.contains(ponto_clicado.iloc[0])]
 
     if not zona_ponto_clicado.empty:
-        # 2. CHAMA A FUNÇÃO E ATUALIZA O ESTADO (SUCESSO)
-        info_zona_clicada, zona_geojson_clicada = exibir_info_zona(zona_ponto_clicado)
+        # 2. CHAMA A FUNÇÃO (EXIBE PARÂMETROS) E ATUALIZA O ESTADO (SUCESSO)
+        info_zona_clicada, zona_geojson_clicada = exibir_info_zona(zona_ponto_clicado) 
         st.session_state.last_selection_coords = (clicked_lat, clicked_lon)
         st.session_state.last_selection_geojson = zona_geojson_clicada
         st.session_state.last_selection_info = info_zona_clicada
