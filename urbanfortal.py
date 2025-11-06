@@ -17,6 +17,12 @@ CENTRO_FORTALEZA = [-3.730451, -38.521798]
 CRS_GEO = "EPSG:4326"
 CRS_METRIC = "EPSG:3857" # Para cálculos de área e perímetro em metros
 
+# --- GERENCIAMENTO DE ESTADO (Para manter a seleção consistente) ---
+if 'last_selection_coords' not in st.session_state:
+    st.session_state.last_selection_coords = None
+    st.session_state.last_selection_geojson = None
+    st.session_state.last_selection_info = None
+
 # --- CARREGAR DADOS ---
 @st.cache_data
 def carregar_dados():
@@ -45,15 +51,15 @@ with st.sidebar:
     
 # --- FUNÇÃO AUXILIAR: EXIBIR INFORMAÇÕES DA ZONA NO SIDEBAR ---
 def exibir_info_zona(zona_encontrada):
-    """Exibe as informações tabulares e formatadas da zona no placeholder do sidebar."""
+    """
+    Exibe as informações tabulares e formatadas da zona no placeholder do sidebar.
+    Retorna o objeto Serie (z) e a GeoJSON interface.
+    """
     if not zona_encontrada.empty:
         z = zona_encontrada.iloc[0]
         
-        # CÁLCULOS GEOGRÁFICOS: (CORREÇÃO DO AttributeError)
-        # 1. Projeta a GeoDataFrame de uma linha para o CRS métrico
+        # CÁLCULOS GEOGRÁFICOS: (Correção do AttributeError mantida)
         zona_proj = zona_encontrada.to_crs(CRS_METRIC)
-        
-        # 2. Acessa os valores escalares de área e perímetro da GeoDataFrame projetada
         area_ha = zona_proj.area.iloc[0] / 10000
         perimetro_m = zona_proj.length.iloc[0]
 
@@ -74,16 +80,17 @@ def exibir_info_zona(zona_encontrada):
         return z, z.geometry.__geo_interface__
     return None, None
 
-# --- INTERFACE DE BUSCA ---
+# --- INTERFACE DE BUSCA (ATUALIZADA PARA USAR O ESTADO) ---
 st.subheader("📍 Buscar Endereço")
 endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, 2000")
-coord_busca = None
-zona_geojson = None
-info_zona_busca = None
 
 if st.button("🔎 Localizar Endereço") and endereco:
-    # Limpa o placeholder do sidebar em nova busca
+    # 1. Resetar o estado da seleção anterior
+    st.session_state.last_selection_coords = None
+    st.session_state.last_selection_geojson = None
+    st.session_state.last_selection_info = None
     sidebar_placeholder.empty() 
+    
     try:
         url = f"https://nominatim.openstreetmap.org/search?q={endereco}, Fortaleza&format=json&limit=1"
         response = requests.get(url, headers={'User-Agent': 'UrbanFortalApp/1.0'})
@@ -91,14 +98,18 @@ if st.button("🔎 Localizar Endereço") and endereco:
         
         if data:
             lat, lon = float(data[0]['lat']), float(data[0]['lon'])
-            coord_busca = (lat, lon)
             ponto = gpd.GeoSeries([Point(lon, lat)], crs=CRS_GEO)
             zona_ponto = gdf[gdf.contains(ponto.iloc[0])]
 
             if not zona_ponto.empty:
                 st.success(f"📍 Endereço encontrado.")
-                # CHAMA A FUNÇÃO PARA EXIBIR INFORMAÇÕES NO SIDEBAR
+                
+                # 2. CHAMA A FUNÇÃO E ATUALIZA O ESTADO (SUCESSO)
                 info_zona_busca, zona_geojson = exibir_info_zona(zona_ponto)
+                st.session_state.last_selection_coords = (lat, lon)
+                st.session_state.last_selection_geojson = zona_geojson
+                st.session_state.last_selection_info = info_zona_busca
+                
             else:
                 st.warning("Endereço encontrado, mas fora de qualquer zona definida.")
         else:
@@ -128,25 +139,30 @@ for _, row in gdf.iterrows():
             }
         ).add_to(m)
 
-# --- DESTAQUE DE ZONA DE BUSCA (SE HOUVER) ---
-if coord_busca and zona_geojson:
-    lat, lon = coord_busca
+# --- DESTAQUE DA ZONA SELECIONADA (UNIFICADO) ---
+# Esta seção agora verifica o st.session_state, garantindo o mesmo visual para Busca e Clique
+if st.session_state.last_selection_coords and st.session_state.last_selection_geojson:
+    lat, lon = st.session_state.last_selection_coords
+    info_zona = st.session_state.last_selection_info
+    geojson = st.session_state.last_selection_geojson
+    
     # 1. Adiciona o destaque (highlight) da zona
     folium.GeoJson(
-        zona_geojson,
-        name="Zona Buscada",
+        geojson,
+        name="Zona Selecionada",
         style_function=lambda x: {
             'fillColor': 'yellow',
             'color': 'red',
             'weight': 4,
             'fillOpacity': 0.15
         },
-        tooltip=info_zona_busca['nome_zona']
+        tooltip=info_zona['nome_zona']
     ).add_to(m)
     
     # 2. Adiciona o marcador (pin)
-    folium.Marker([lat, lon], popup=f"Endereço Buscado:<br>{info_zona_busca['nome_zona']}", icon=folium.Icon(color='red', icon='map-marker')).add_to(m)
-    # Move o centro do mapa para o marcador
+    folium.Marker([lat, lon], popup=f"Ponto Selecionado:<br>{info_zona['nome_zona']}", icon=folium.Icon(color='red', icon='map-marker')).add_to(m)
+    
+    # Se a seleção foi recente, centraliza o mapa (opcional, pode ser removido)
     m.location = [lat, lon]
     m.zoom_start = 15
 
@@ -156,49 +172,29 @@ st.markdown("**🖱️ Dica:** clique em qualquer ponto do mapa para identificar
 # O mapa é renderizado e retorna o objeto de clique
 map_data = st_folium(m, height=700, width=None, returned_objects=["last_clicked"])
 
-# --- TRATAMENTO DE CLIQUE NO MAPA ---
+# --- TRATAMENTO DE CLIQUE NO MAPA (ATUALIZADO PARA USAR O ESTADO) ---
 if map_data and map_data.get("last_clicked"):
-    # Limpa o placeholder do sidebar ao clicar no mapa
+    # 1. Resetar o estado da seleção anterior (se for um novo clique)
+    st.session_state.last_selection_coords = None
+    st.session_state.last_selection_geojson = None
+    st.session_state.last_selection_info = None
     sidebar_placeholder.empty()
+
     clicked_lat = map_data["last_clicked"]["lat"]
     clicked_lon = map_data["last_clicked"]["lng"]
-    
-    # CORREÇÃO: ADICIONA O MARCADOR DO CLIQUE DIRETO NO MAPA
-    # Criamos um novo mapa com o marcador e passamos para st_folium na próxima execução,
-    # mas a forma mais simples é renderizar o mapa novamente na interface
-    
-    # Uma solução mais direta (e que funciona com o st_folium) é re-renderizar o mapa base
-    # com o novo marcador, mas isso torna o código repetitivo.
-    # A melhor prática com `st_folium` é garantir que o objeto `m` contenha o marcador antes de ser renderizado.
-    
-    # Para o propósito imediato e funcional, colocamos o marcador no mapa `m` ANTES de renderizar,
-    # mas o `st_folium` não permite a adição dinâmica sem re-renderização completa
-    # (o que já é feito no loop principal do Streamlit).
-    
-    # Para forçar o Pin no clique sem re-renderizar o mapa base e perder o estado, é preciso
-    # adicionar uma camada ao mapa renderizado. No Streamlit, a maneira de fazer isso
-    # é **renderizar o mapa novamente com o marcador**.
-    
-    # No entanto, a forma mais simples (e que funciona no loop do Streamlit) é garantir que,
-    # **na próxima execução do script**, o mapa `m` já tenha o marcador.
-    
-    # Adicionando o marcador ao mapa `m` (se o usuário clicar, o script roda novamente
-    # e renderiza o mapa com o marcador):
-    folium.Marker(
-        [clicked_lat, clicked_lon], 
-        popup=f"Ponto Clicado:<br>Lat: {clicked_lat:.5f}, Lon: {clicked_lon:.5f}", 
-        icon=folium.Icon(color='blue', icon='circle')
-    ).add_to(m)
-    
-    # A próxima renderização do mapa (na linha 170) agora incluirá este marcador.
-    
+
     # Realiza a consulta espacial para o ponto clicado
     ponto_clicado = gpd.GeoSeries([Point(clicked_lon, clicked_lat)], crs=CRS_GEO)
     zona_ponto_clicado = gdf[gdf.contains(ponto_clicado.iloc[0])]
 
     if not zona_ponto_clicado.empty:
-        # CHAMA A FUNÇÃO PARA EXIBIR INFORMAÇÕES NO SIDEBAR
-        exibir_info_zona(zona_ponto_clicado)
+        # 2. CHAMA A FUNÇÃO E ATUALIZA O ESTADO (SUCESSO)
+        info_zona_clicada, zona_geojson_clicada = exibir_info_zona(zona_ponto_clicado)
+        st.session_state.last_selection_coords = (clicked_lat, clicked_lon)
+        st.session_state.last_selection_geojson = zona_geojson_clicada
+        st.session_state.last_selection_info = info_zona_clicada
+        # Força o Streamlit a rodar novamente para desenhar o Pin e o Destaque
+        st.rerun() 
     else:
         with sidebar_placeholder.container():
             st.markdown("---")
