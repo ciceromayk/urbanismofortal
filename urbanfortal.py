@@ -71,9 +71,12 @@ def reverse_geocode(lat, lon):
     except:
         return 'Erro ao buscar o endereço.'
 
-# --- FUNÇÃO AUXILIAR: EXIBIR INFORMAÇÕES DA ZONA NO SIDEBAR ---
-def exibir_info_zona(zona_encontrada, lat=None, lon=None):
-    """Exibe as informações tabulares e formatadas da zona no placeholder do sidebar."""
+# --- FUNÇÃO AUXILIAR: EXIBIR INFORMAÇÕES DA ZONA NO SIDEBAR (MODIFICADA) ---
+def exibir_info_zona(zona_encontrada, endereco_str=None):
+    """
+    Exibe as informações da zona no placeholder do sidebar.
+    Recebe a string do endereço completo (endereco_str).
+    """
     if not zona_encontrada.empty:
         z = zona_encontrada.iloc[0]
         
@@ -87,10 +90,9 @@ def exibir_info_zona(zona_encontrada, lat=None, lon=None):
             st.markdown("---")
             st.subheader(f"Zona: {z['nome_zona']}")
             
-            # Inclui o Endereço do Local (Se fornecido)
-            if lat is not None and lon is not None:
-                endereco_completo = reverse_geocode(lat, lon)
-                st.info(f"**Local:** {endereco_completo}")
+            # Inclui o Endereço do Local (AGORA RECEBE UMA STRING)
+            if endereco_str:
+                st.info(f"**Local:** {endereco_str}")
 
             st.write(f"**Tipo de Zona:** {z['tipo_zona']}")
             st.markdown(f"**Geometria:**<br>Área: **{area_ha:.2f} ha**<br>Perímetro: **{perimetro_m:.0f} m**", unsafe_allow_html=True)
@@ -127,8 +129,10 @@ if st.button("🔎 Localizar Endereço") and endereco:
 
             if not zona_ponto.empty:
                 st.success(f"📍 Endereço encontrado.")
-                # Passa as coordenadas para exibir o endereço geocodificado no sidebar
-                info_zona_busca, zona_geojson = exibir_info_zona(zona_ponto, lat=lat, lon=lon) 
+                
+                # CHAMA A REVERSA AQUI e passa a string para a função de exibição
+                endereco_completo = reverse_geocode(lat, lon)
+                info_zona_busca, zona_geojson = exibir_info_zona(zona_ponto, endereco_str=endereco_completo) 
             else:
                 st.warning("Endereço encontrado, mas fora de qualquer zona definida.")
         else:
@@ -139,7 +143,6 @@ if st.button("🔎 Localizar Endereço") and endereco:
         sidebar_placeholder.empty()
 
 # --- MAPA BASE ---
-# Usa a camada selecionada pelo usuário
 if tile_selection == "Esri World Imagery (Satélite)":
     m = folium.Map(location=CENTRO_FORTALEZA, zoom_start=12, tiles=selected_tile, attr='Esri World Imagery')
 else:
@@ -147,7 +150,6 @@ else:
 
 
 # --- ADICIONA POLÍGONOS DE ZONAS (BASE) ---
-# Adiciona todos os polígonos com tooltips
 for _, row in gdf.iterrows():
     if row.geometry is not None:
         tooltip_text = f"<b>{row['nome_zona']}</b><br>CA Máx: {row['indice_aproveitamento_maximo']}<br>TO: {row['taxa_ocupacao_solo']}<br>Altura Máx: {row['altura_maxima']}"
@@ -166,20 +168,19 @@ for _, row in gdf.iterrows():
 # --- DESTAQUE DE ZONA DE BUSCA (SE HOUVER) ---
 if coord_busca and zona_geojson:
     lat, lon = coord_busca
-    # 1. Adiciona o destaque (highlight) da zona - Corrigido para remover a linha retangular
+    # Ajuste do estilo para remover a linha retangular (como solicitado)
     folium.GeoJson(
         zona_geojson,
         name="Zona Buscada",
         style_function=lambda x: {
-            'fillColor': '#FFD700', # Cor amarela
-            'color': 'none',        # <--- CORREÇÃO: Linha removida
-            'weight': 0,            # <--- CORREÇÃO: Peso zero
-            'fillOpacity': 0.4      # Aumenta a opacidade do preenchimento
+            'fillColor': '#FFD700',
+            'color': 'none',        
+            'weight': 0,            
+            'fillOpacity': 0.4      
         },
         tooltip=info_zona_busca['nome_zona']
     ).add_to(m)
     
-    # 2. Adiciona o marcador (pin)
     folium.Marker([lat, lon], popup=f"Endereço Buscado:<br>{info_zona_busca['nome_zona']}", icon=folium.Icon(color='red', icon='map-marker')).add_to(m)
     m.location = [lat, lon]
     m.zoom_start = 15
@@ -189,7 +190,7 @@ st.subheader("Mapa Interativo")
 st.markdown("**🖱️ Dica:** clique em qualquer ponto do mapa para identificar a zona correspondente.")
 map_data = st_folium(m, height=700, width=None, returned_objects=["last_clicked"])
 
-# --- TRATAMENTO DE CLIQUE NO MAPA ---
+# --- TRATAMENTO DE CLIQUE NO MAPA (CORRIGIDO) ---
 if map_data and map_data.get("last_clicked"):
     sidebar_placeholder.empty()
     clicked_lat = map_data["last_clicked"]["lat"]
@@ -200,13 +201,10 @@ if map_data and map_data.get("last_clicked"):
     zona_ponto_clicado = gdf[gdf.contains(ponto_clicado.iloc[0])]
 
     if not zona_ponto_clicado.empty:
-        # CHAMA A FUNÇÃO PARA EXIBIR INFORMAÇÕES NO SIDEBAR, passando as coordenadas do clique
-        exibir_info_zona(zona_ponto_clicado, lat=clicked_lat, lon=clicked_lon)
-        
-        # Opcional: Adicionar um marcador no local do clique para visualização
-        folium.Marker([clicked_lat, clicked_lon], popup="Local do Clique", icon=folium.Icon(color='blue', icon='info')).add_to(m)
-        # Nota: O marcador não aparece instantaneamente sem a nova renderização do mapa,
-        # mas pode ser útil para depuração ou se o mapa for rerenderizado por outra ação.
+        # CHAMA A REVERSA AQUI (FORA DA FUNÇÃO DE EXIBIÇÃO)
+        endereco_completo = reverse_geocode(clicked_lat, clicked_lon)
+        # CHAMA A FUNÇÃO PARA EXIBIR INFORMAÇÕES NO SIDEBAR, passando a string de endereço
+        exibir_info_zona(zona_ponto_clicado, endereco_str=endereco_completo)
     else:
         with sidebar_placeholder.container():
             st.markdown("---")
