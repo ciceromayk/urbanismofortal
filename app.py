@@ -9,6 +9,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 # --- IMPORTAÇÕES LOCAIS (SEM PREFIXO src.) ---
+from typing import Tuple, Dict
 from parsing import parse_kmz_or_kml
 from mapping import build_folium_map, build_pydeck_map
 from utils import (
