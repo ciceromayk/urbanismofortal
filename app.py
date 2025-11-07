@@ -18,6 +18,9 @@ from src.utils import (
     split_by_geom_type,
 )
 
+import sys, os
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+
 # ------------- CONFIG -------------
 st.set_page_config(page_title="KMZ/KML Viewer", layout="wide")
 st.title("🗺️ LEITOR KMZ/KML – MAPA INTERATIVO")
