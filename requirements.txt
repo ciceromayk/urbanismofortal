@@ -9,3 +9,4 @@ fiona
 rtree
 plotly
 requests
+pydeck
