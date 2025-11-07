@@ -1,16 +1,17 @@
-import sys, os
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-
-import json
-import io
-import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Point, LineString, Polygon, MultiPolygon, MultiLineString, MultiPoint
+import sys
+import os
 import streamlit as st
 
-from src.parsing import parse_kmz_or_kml
-from src.mapping import build_folium_map, build_pydeck_map
-from src.utils import (
+# --- GARANTE QUE O DIRETÓRIO RAIZ ESTÁ NO PYTHONPATH ---
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(ROOT_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+# --- IMPORTAÇÕES LOCAIS (SEM PREFIXO src.) ---
+from parsing import parse_kmz_or_kml
+from mapping import build_folium_map, build_pydeck_map
+from utils import (
     to_geojson_bytes,
     gdf_to_csv_bytes,
     detect_crs_or_default,
