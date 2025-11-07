@@ -30,6 +30,7 @@ MAP_TILES = {
 def carregar_dados():
     """Carrega dados geoespaciais do CSV com cache."""
     try:
+        # Nota: O arquivo zoneamento_fortaleza.csv deve estar na mesma pasta
         df = pd.read_csv("zoneamento_fortaleza.csv") 
         gdf = gpd.GeoDataFrame(
             df.drop(columns=['wkt_multipolygon']),
@@ -45,11 +46,24 @@ gdf = carregar_dados()
 if gdf is None:
     st.stop()
 
-# --- SIDEBAR PARA INFORMAÇÕES E PARÂMETROS URBANÍSTICOS ---
+# Variáveis de estado para a busca
+coord_busca = None
+zona_geojson = None
+info_zona_busca = None
+endereco_buscado = None
+
+# --- SIDEBAR PARA BUSCA E INFORMAÇÕES URBANÍSTICAS ---
 with st.sidebar:
     st.title("Parâmetros Urbanísticos")
     
-    # Adiciona o dropdown para tipo de mapa no topo do sidebar
+    # 1. MOVER BUSCA PARA O SIDEBAR
+    st.subheader("📍 Buscar Endereço")
+    endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, 2000")
+    if st.button("🔎 Localizar Endereço") and endereco:
+        endereco_buscado = endereco # Armazena o endereço digitado
+        
+    # Adiciona o dropdown para tipo de mapa
+    st.markdown("---")
     st.subheader("Opções de Mapa")
     tile_selection = st.selectbox(
         "Selecione a Camada Base:",
@@ -71,16 +85,13 @@ def reverse_geocode(lat, lon):
     except:
         return 'Erro ao buscar o endereço.'
 
-# --- FUNÇÃO AUXILIAR: EXIBIR INFORMAÇÕES DA ZONA NO SIDEBAR (MODIFICADA) ---
+# --- FUNÇÃO AUXILIAR: EXIBIR INFORMAÇÕES DA ZONA NO SIDEBAR ---
 def exibir_info_zona(zona_encontrada, endereco_str=None):
-    """
-    Exibe as informações da zona no placeholder do sidebar.
-    Recebe a string do endereço completo (endereco_str).
-    """
+    """Exibe as informações da zona no placeholder do sidebar."""
     if not zona_encontrada.empty:
         z = zona_encontrada.iloc[0]
         
-        # Cálculos Geográficos (Corrigido o AttributeError)
+        # Cálculos Geográficos
         zona_proj = zona_encontrada.to_crs(CRS_METRIC)
         area_ha = zona_proj.area.iloc[0] / 10000
         perimetro_m = zona_proj.length.iloc[0]
@@ -107,17 +118,11 @@ def exibir_info_zona(zona_encontrada, endereco_str=None):
         return z, z.geometry.__geo_interface__
     return None, None
 
-# --- INTERFACE DE BUSCA ---
-st.subheader("📍 Buscar Endereço")
-endereco = st.text_input("Digite um endereço ou local em Fortaleza:", placeholder="Ex: Av. Beira-Mar, 2000")
-coord_busca = None
-zona_geojson = None
-info_zona_busca = None
-
-if st.button("🔎 Localizar Endereço") and endereco:
+# --- LÓGICA DE BUSCA DE ENDEREÇO (Movida para fora do `if st.button` para garantir que as variáveis sejam preenchidas) ---
+if endereco_buscado:
     sidebar_placeholder.empty() 
     try:
-        url = f"https://nominatim.openstreetmap.org/search?q={endereco}, Fortaleza&format=json&limit=1"
+        url = f"https://nominatim.openstreetmap.org/search?q={endereco_buscado}, Fortaleza&format=json&limit=1"
         response = requests.get(url, headers={'User-Agent': 'UrbanFortalApp/1.0'})
         data = response.json()
         
@@ -129,9 +134,8 @@ if st.button("🔎 Localizar Endereço") and endereco:
 
             if not zona_ponto.empty:
                 st.success(f"📍 Endereço encontrado.")
-                
-                # CHAMA A REVERSA AQUI e passa a string para a função de exibição
-                endereco_completo = reverse_geocode(lat, lon)
+                # Usa o display_name do Nominatim, que é mais preciso para a barra lateral
+                endereco_completo = data[0].get('display_name', endereco_buscado)
                 info_zona_busca, zona_geojson = exibir_info_zona(zona_ponto, endereco_str=endereco_completo) 
             else:
                 st.warning("Endereço encontrado, mas fora de qualquer zona definida.")
@@ -168,15 +172,15 @@ for _, row in gdf.iterrows():
 # --- DESTAQUE DE ZONA DE BUSCA (SE HOUVER) ---
 if coord_busca and zona_geojson:
     lat, lon = coord_busca
-    # Ajuste do estilo para remover a linha retangular (como solicitado)
+    # 2. REVERTER O ESTILO: REINTRODUZIR LINHA VERMELHA
     folium.GeoJson(
         zona_geojson,
         name="Zona Buscada",
         style_function=lambda x: {
-            'fillColor': '#FFD700',
-            'color': 'none',        
-            'weight': 0,            
-            'fillOpacity': 0.4      
+            'fillColor': '#FFD700', # Amarelo
+            'color': 'red',         # <--- CORREÇÃO: Linha Vermelha reintroduzida
+            'weight': 3,            # <--- CORREÇÃO: Peso da linha ajustado
+            'fillOpacity': 0.3      # Opacidade do preenchimento
         },
         tooltip=info_zona_busca['nome_zona']
     ).add_to(m)
@@ -190,20 +194,17 @@ st.subheader("Mapa Interativo")
 st.markdown("**🖱️ Dica:** clique em qualquer ponto do mapa para identificar a zona correspondente.")
 map_data = st_folium(m, height=700, width=None, returned_objects=["last_clicked"])
 
-# --- TRATAMENTO DE CLIQUE NO MAPA (CORRIGIDO) ---
+# --- TRATAMENTO DE CLIQUE NO MAPA ---
 if map_data and map_data.get("last_clicked"):
     sidebar_placeholder.empty()
     clicked_lat = map_data["last_clicked"]["lat"]
     clicked_lon = map_data["last_clicked"]["lng"]
 
-    # Realiza a consulta espacial para o ponto clicado
     ponto_clicado = gpd.GeoSeries([Point(clicked_lon, clicked_lat)], crs=CRS_GEO)
     zona_ponto_clicado = gdf[gdf.contains(ponto_clicado.iloc[0])]
 
     if not zona_ponto_clicado.empty:
-        # CHAMA A REVERSA AQUI (FORA DA FUNÇÃO DE EXIBIÇÃO)
         endereco_completo = reverse_geocode(clicked_lat, clicked_lon)
-        # CHAMA A FUNÇÃO PARA EXIBIR INFORMAÇÕES NO SIDEBAR, passando a string de endereço
         exibir_info_zona(zona_ponto_clicado, endereco_str=endereco_completo)
     else:
         with sidebar_placeholder.container():
