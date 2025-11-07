@@ -166,4 +166,13 @@ def parse_kmz_or_kml(file_bytes: bytes, filename: str) -> Tuple[gpd.GeoDataFrame
     gdf_all = gdf_all.dropna(subset=["geometry"]).copy()
     gdf_all["geometry"] = gdf_all["geometry"].apply(lambda g: g.buffer(0) if g and not g.is_valid else g)
 
+    # --- Normaliza tipos de geometria (explode GeometryCollection) ---
+    gdf_all = gdf_all.explode(ignore_index=True)
+    gdf_all = gdf_all[gdf_all.geometry.notnull()].copy()
+
+    # --- Filtra apenas geometrias suportadas ---
+    gdf_all = gdf_all[gdf_all.geometry.geom_type.isin(
+        ["Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon"]
+    )].copy()
+
     return gdf_all, layers
