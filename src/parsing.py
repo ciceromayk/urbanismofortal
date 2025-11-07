@@ -1,4 +1,3 @@
-# src/parsing.py
 from __future__ import annotations
 
 import io
@@ -9,34 +8,36 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import shape, Point, LineString, Polygon, MultiPolygon, MultiLineString, MultiPoint
 from shapely.geometry.base import BaseGeometry
-
-# --- IMPORT ROBUSTO DO FASTKML ---
-HAVE_FASTKML = True
-FASTKML_IMPORT_ERROR: Optional[BaseException] = None
-try:
-    from fastkml import kml as fastkml_mod
-except BaseException as e:
-    HAVE_FASTKML = False
-    FASTKML_IMPORT_ERROR = e
-
-# (OPCIONAL) IMPORTS PARA FALLBACK
 from shapely.ops import unary_union
 
-def _fail_fastkml_message() -> str:
-    base = "DEPENDÊNCIA 'fastkml' NÃO ENCONTRADA OU FALHOU AO IMPORTAR."
-    if FASTKML_IMPORT_ERROR:
-        base += f" DETALHES: {type(FASTKML_IMPORT_ERROR).__name__}: {FASTKML_IMPORT_ERROR}"
-    base += " → SOLUÇÃO: execute 'pip install fastkml==0.12 lxml>=4.9,<6' e faça redeploy."
-    return base
+# ============================================================
+# IMPORTAÇÃO SEGURA DO FASTKML
+# ============================================================
+try:
+    from fastkml import kml
+except ImportError as e:
+    raise ImportError(
+        "⚠️ A biblioteca 'fastkml' não está instalada. "
+        "Adicione 'fastkml==0.12' ao seu requirements.txt e redeploy no Streamlit Cloud."
+    ) from e
+
+
+# ============================================================
+# FUNÇÕES AUXILIARES
+# ============================================================
 
 def _iter_placemarks(feature) -> Iterable:
+    """Percorre recursivamente todos os Placemarks (Documents, Folders, etc)."""
     if hasattr(feature, "features"):
-        for f in feature.features():
+        feats = feature.features() if callable(feature.features) else feature.features
+        for f in feats:
             yield from _iter_placemarks(f)
     else:
         yield feature
 
+
 def _geom_from_fastkml(geom_obj) -> Optional[BaseGeometry]:
+    """Converte geometria do fastkml (geojson-like) para shapely."""
     if geom_obj is None:
         return None
     try:
@@ -44,7 +45,9 @@ def _geom_from_fastkml(geom_obj) -> Optional[BaseGeometry]:
     except Exception:
         return None
 
+
 def _extract_extdata(pm) -> dict:
+    """Extrai ExtendedData (quando disponível) e normaliza em dict plano."""
     data = {}
     try:
         if hasattr(pm, "extended_data") and pm.extended_data:
@@ -63,7 +66,9 @@ def _extract_extdata(pm) -> dict:
         pass
     return data
 
+
 def _locate_kml_in_kmz(kmz_bytes: bytes) -> List[Tuple[str, bytes]]:
+    """Descompacta um arquivo KMZ e retorna todos os KMLs internos."""
     out = []
     with zipfile.ZipFile(io.BytesIO(kmz_bytes)) as z:
         for name in z.namelist():
@@ -71,73 +76,94 @@ def _locate_kml_in_kmz(kmz_bytes: bytes) -> List[Tuple[str, bytes]]:
                 out.append((name, z.read(name)))
     return out
 
+
+# ============================================================
+# PARSE DE KML
+# ============================================================
+
 def parse_kml_bytes(kml_bytes: bytes, layer_hint: Optional[str] = None) -> gpd.GeoDataFrame:
-    """
-    PREFERENCIAL: FASTKML. FALLBACK: TENTA OGR (SE DISPONÍVEL NO AMBIENTE).
-    """
-    if HAVE_FASTKML:
-        k = fastkml_mod.KML()
-        k.from_string(kml_bytes)
+    """Lê bytes de um KML e retorna um GeoDataFrame com atributos e geometria."""
+    k = kml.KML()
+    k.from_string(kml_bytes)
 
-        rows = []
-        def _walk(feat, path: List[str]):
-            if hasattr(feat, "name") and getattr(feat, "features", None):
-                new_path = path + [feat.name] if feat.name else path
-                for f in feat.features():
-                    _walk(f, new_path)
-            else:
-                pm = feat
-                geom = _geom_from_fastkml(getattr(pm, "geometry", None))
-                if geom is None:
-                    return
-                rows.append({
-                    "__layer__": " / ".join(path) if path else (layer_hint or ""),
-                    "name": getattr(pm, "name", None),
-                    "description": getattr(pm, "description", None),
-                    **_extract_extdata(pm),
+    rows = []
+
+    def _walk(feat, layer_path: List[str]):
+        """Percorre recursivamente os nodes do KML."""
+        if hasattr(feat, "features") and getattr(feat, "features"):
+            new_path = layer_path + [feat.name] if getattr(feat, "name", None) else layer_path
+            feats = feat.features() if callable(feat.features) else feat.features
+            for f in feats:
+                _walk(f, new_path)
+        else:
+            pm = feat
+            geom = _geom_from_fastkml(getattr(pm, "geometry", None))
+            if geom is None:
+                return
+            name = getattr(pm, "name", None)
+            desc = getattr(pm, "description", None)
+            ext = _extract_extdata(pm)
+            rows.append(
+                {
+                    "__layer__": " / ".join(layer_path) if layer_path else (layer_hint or ""),
+                    "name": name,
+                    "description": desc,
+                    **ext,
                     "geometry": geom,
-                })
+                }
+            )
 
-        for f in k.features():
-            _walk(f, [])
+    # Corrige o acesso à raiz (lista ou função)
+    feats_root = k.features() if callable(k.features) else k.features
+    for f in feats_root:
+        _walk(f, [])
 
-        if not rows:
-            return gpd.GeoDataFrame(columns=["__layer__", "name", "description", "geometry"],
-                                    geometry="geometry", crs=None)
-        return gpd.GeoDataFrame(rows, geometry="geometry", crs=None)
+    if not rows:
+        return gpd.GeoDataFrame(
+            columns=["__layer__", "name", "description", "geometry"],
+            geometry="geometry",
+            crs=None,
+        )
 
-    # --- FALLBACK: TENTAR OGR VIA GEOPANDAS/FIONA (SE LIBKML DISPONÍVEL) ---
-    try:
-        # ALGUNS AMBIENTES DO CLOUD PODEM TER DRIVER KML HABILITADO
-        # OBS: O OGR LÊ CAMADAS COMO "OGRGeoJSON"/"KML". TENTAMOS O PADRÃO.
-        from tempfile import NamedTemporaryFile
-        with NamedTemporaryFile(suffix=".kml") as tmp:
-            tmp.write(kml_bytes)
-            tmp.flush()
-            gdf = gpd.read_file(tmp.name)
-            gdf["__layer__"] = layer_hint or ""
-            return gdf
-    except Exception:
-        raise ImportError(_fail_fastkml_message())
+    gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs=None)
+    return gdf
 
-def parse_kmz_or_kml(file_bytes: bytes, filename: str):
+
+# ============================================================
+# PARSE DE KMZ (AGRUPA MÚLTIPLOS KMLs)
+# ============================================================
+
+def parse_kmz_or_kml(file_bytes: bytes, filename: str) -> Tuple[gpd.GeoDataFrame, Dict[str, gpd.GeoDataFrame]]:
+    """
+    Lê um arquivo .kmz (descompactando internamente) ou .kml,
+    retornando:
+      - GeoDataFrame consolidado (todas as camadas)
+      - Dicionário com GeoDataFrames por camada
+    """
+    layers: Dict[str, gpd.GeoDataFrame] = {}
+
     if filename.lower().endswith(".kmz"):
         kmls = _locate_kml_in_kmz(file_bytes)
         if not kmls:
-            raise ValueError("KMZ SEM KML INTERNO.")
-        frames = []
-        layers: Dict[str, gpd.GeoDataFrame] = {}
+            raise ValueError("O KMZ não contém nenhum KML interno válido.")
+
+        gdfs = []
         for kml_name, kml_bytes in kmls:
             gdf = parse_kml_bytes(kml_bytes, layer_hint=kml_name)
             layers[kml_name] = gdf
-            frames.append(gdf)
-        gdf_all = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), geometry="geometry")
+            gdfs.append(gdf)
+
+        gdf_all = gpd.GeoDataFrame(pd.concat(gdfs, ignore_index=True), geometry="geometry")
+
     elif filename.lower().endswith(".kml"):
         gdf_all = parse_kml_bytes(file_bytes, layer_hint=filename)
-        layers = {filename: gdf_all}
-    else:
-        raise ValueError("EXTENSÃO NÃO SUPORTADA (USE .KMZ OU .KML).")
+        layers[filename] = gdf_all
 
+    else:
+        raise ValueError("Formato não suportado. Use arquivos .KMZ ou .KML.")
+
+    # Remove linhas sem geometria e corrige geometrias inválidas
     gdf_all = gdf_all.dropna(subset=["geometry"]).copy()
     gdf_all["geometry"] = gdf_all["geometry"].apply(lambda g: g.buffer(0) if g and not g.is_valid else g)
+
     return gdf_all, layers
