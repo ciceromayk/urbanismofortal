@@ -1,7 +1,8 @@
+import sys, os
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+
 import json
 import io
-from typing import Dict, Optional, Tuple
-
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point, LineString, Polygon, MultiPolygon, MultiLineString, MultiPoint
@@ -17,9 +18,6 @@ from src.utils import (
     simplify_geometries,
     split_by_geom_type,
 )
-
-import sys, os
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 # ------------- CONFIG -------------
 st.set_page_config(page_title="KMZ/KML Viewer", layout="wide")
