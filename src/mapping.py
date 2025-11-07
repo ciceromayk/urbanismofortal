@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from typing import Dict
-
 import geopandas as gpd
-
+import pandas as pd
 
 def _popup_html(row) -> str:
     # POPUP COM NOME, DESCRIÇÃO E DEMAIS ATRIBUTOS
