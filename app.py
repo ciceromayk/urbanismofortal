@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,8 @@ COLUMNS = [
     "bairro",
     "construtora",
     "endereco",
+    "latitude",
+    "longitude",
     "unidades_total",
     "unidades_disponiveis",
     "faixa_preco",
@@ -29,6 +33,10 @@ COLUMNS = [
 ]
 
 
+DEFAULT_ADMIN_USER = os.getenv("ADM_USERNAME", "admin")
+DEFAULT_ADMIN_PASSWORD_HASH = hashlib.sha256(os.getenv("ADM_PASSWORD", "admin123").encode("utf-8")).hexdigest()
+
+
 def ensure_storage() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not DATA_FILE.exists():
@@ -38,17 +46,27 @@ def ensure_storage() -> None:
 def load_data() -> pd.DataFrame:
     ensure_storage()
     df = pd.read_csv(DATA_FILE)
+
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+
     for col in ["unidades_total", "unidades_disponiveis"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    for col in ["latitude", "longitude"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
     if "id" not in df.columns:
         df["id"] = range(1, len(df) + 1)
-    return df
+
+    return df[COLUMNS]
 
 
 def save_data(df: pd.DataFrame) -> None:
-    df = df.copy()
-    df = df[COLUMNS]
-    df.to_csv(DATA_FILE, index=False)
+    payload = df.copy()
+    payload = payload[COLUMNS]
+    payload.to_csv(DATA_FILE, index=False)
 
 
 def parse_tipologias(text: str) -> list[dict[str, Any]]:
@@ -58,9 +76,39 @@ def parse_tipologias(text: str) -> list[dict[str, Any]]:
         value = json.loads(text)
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
-        return []
     except json.JSONDecodeError:
-        return []
+        pass
+    return []
+
+
+def check_admin_login(username: str, password: str) -> bool:
+    password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return username == DEFAULT_ADMIN_USER and password_hash == DEFAULT_ADMIN_PASSWORD_HASH
+
+
+def render_admin_access() -> bool:
+    st.sidebar.subheader("Acesso ADM")
+    if "is_admin" not in st.session_state:
+        st.session_state.is_admin = False
+
+    if st.session_state.is_admin:
+        st.sidebar.success("Sessão ADM ativa")
+        if st.sidebar.button("Sair do modo ADM"):
+            st.session_state.is_admin = False
+        return st.session_state.is_admin
+
+    with st.sidebar.form("admin_login"):
+        user = st.text_input("Usuário")
+        pwd = st.text_input("Senha", type="password")
+        submitted = st.form_submit_button("Entrar como ADM")
+        if submitted:
+            if check_admin_login(user, pwd):
+                st.session_state.is_admin = True
+                st.sidebar.success("Login ADM realizado com sucesso")
+            else:
+                st.sidebar.error("Credenciais inválidas")
+
+    return st.session_state.is_admin
 
 
 def render_overview(df: pd.DataFrame) -> None:
@@ -74,8 +122,8 @@ def render_overview(df: pd.DataFrame) -> None:
 def render_filters(df: pd.DataFrame) -> pd.DataFrame:
     st.sidebar.header("Filtros")
 
-    construtoras = ["Todas"] + sorted(df["construtora"].dropna().unique().tolist())
-    bairros = ["Todos"] + sorted(df["bairro"].dropna().unique().tolist())
+    construtoras = ["Todas"] + sorted(df["construtora"].dropna().astype(str).unique().tolist())
+    bairros = ["Todos"] + sorted(df["bairro"].dropna().astype(str).unique().tolist())
 
     construtora = st.sidebar.selectbox("Construtora", construtoras)
     bairro = st.sidebar.selectbox("Bairro", bairros)
@@ -92,6 +140,17 @@ def render_filters(df: pd.DataFrame) -> pd.DataFrame:
     return filtrado
 
 
+def render_map(df: pd.DataFrame) -> None:
+    st.subheader("Mapa dos empreendimentos")
+    mapa_df = df.dropna(subset=["latitude", "longitude"]).copy()
+
+    if mapa_df.empty:
+        st.info("Nenhum empreendimento com coordenadas cadastradas para exibir no mapa.")
+        return
+
+    st.map(mapa_df.rename(columns={"latitude": "lat", "longitude": "lon"})[["lat", "lon"]], zoom=11)
+
+
 def render_catalog(df: pd.DataFrame) -> None:
     st.subheader("Catálogo")
     if df.empty:
@@ -101,6 +160,7 @@ def render_catalog(df: pd.DataFrame) -> None:
     for _, row in df.sort_values(by="nome").iterrows():
         with st.expander(f"{row['nome']} • {row['bairro']} • {row['construtora']}"):
             st.markdown(f"**Endereço:** {row['endereco']}")
+            st.markdown(f"**Coordenadas:** {row['latitude']}, {row['longitude']}")
             st.markdown(f"**Previsão de entrega:** {row['previsao_entrega']}")
             st.markdown(f"**Faixa de preço:** {row['faixa_preco']}")
             st.markdown(
@@ -127,12 +187,15 @@ def next_id(df: pd.DataFrame) -> int:
 
 
 def render_new_launch_form(df: pd.DataFrame) -> pd.DataFrame:
-    st.subheader("Cadastrar lançamento")
+    st.subheader("Cadastrar lançamento (ADM)")
     with st.form("novo_lancamento", clear_on_submit=True):
         nome = st.text_input("Nome do empreendimento*")
         bairro = st.text_input("Bairro*")
         construtora = st.text_input("Construtora*")
         endereco = st.text_input("Endereço")
+        c_geo1, c_geo2 = st.columns(2)
+        latitude = c_geo1.number_input("Latitude*", value=-3.7319, format="%.6f")
+        longitude = c_geo2.number_input("Longitude*", value=-38.5267, format="%.6f")
         c1, c2 = st.columns(2)
         unidades_total = c1.number_input("Número total de unidades", min_value=0, value=0)
         unidades_disp = c2.number_input("Unidades disponíveis", min_value=0, value=0)
@@ -161,6 +224,8 @@ def render_new_launch_form(df: pd.DataFrame) -> pd.DataFrame:
                 "bairro": bairro,
                 "construtora": construtora,
                 "endereco": endereco,
+                "latitude": float(latitude),
+                "longitude": float(longitude),
                 "unidades_total": int(unidades_total),
                 "unidades_disponiveis": int(unidades_disp),
                 "faixa_preco": faixa_preco,
@@ -180,7 +245,7 @@ def render_new_launch_form(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_import_export(df: pd.DataFrame) -> pd.DataFrame:
-    st.subheader("Importação e exportação")
+    st.subheader("Importação e exportação (ADM)")
     uploaded = st.file_uploader("Importar CSV de lançamentos", type=["csv"])
     if uploaded is not None:
         try:
@@ -210,19 +275,24 @@ def main() -> None:
     st.set_page_config(page_title="Lançamentos Fortaleza", layout="wide")
     st.title("📍 Catálogo de Lançamentos Imobiliários — Fortaleza/CE")
     st.caption(
-        "Centralize informações de unidades, disponibilidade, plantas, imagens e dados de construtora em um único painel."
+        "Interface pública com mapa de localização dos empreendimentos e acesso restrito para cadastro por ADM."
     )
 
     df = load_data()
+    is_admin = render_admin_access()
 
     render_overview(df)
     df_filtrado = render_filters(df)
+    render_map(df_filtrado)
     render_catalog(df_filtrado)
 
-    st.divider()
-    df = render_new_launch_form(df)
-    st.divider()
-    render_import_export(df)
+    if is_admin:
+        st.divider()
+        df = render_new_launch_form(df)
+        st.divider()
+        render_import_export(df)
+    else:
+        st.info("Modo visitante: cadastro e importação de empreendimentos são exclusivos para administrador.")
 
 
 if __name__ == "__main__":
