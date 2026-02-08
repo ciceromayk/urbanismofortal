@@ -6,8 +6,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+import folium
 import pandas as pd
 import streamlit as st
+from streamlit_folium import st_folium
 
 DATA_DIR = Path("data")
 DATA_FILE = DATA_DIR / "lancamentos.csv"
@@ -32,9 +34,10 @@ COLUMNS = [
     "disponibilidade_tipologia",
 ]
 
-
 DEFAULT_ADMIN_USER = os.getenv("ADM_USERNAME", "admin")
 DEFAULT_ADMIN_PASSWORD_HASH = hashlib.sha256(os.getenv("ADM_PASSWORD", "admin123").encode("utf-8")).hexdigest()
+
+FORTALEZA_CENTER = (-3.7319, -38.5267)
 
 
 def ensure_storage() -> None:
@@ -140,15 +143,39 @@ def render_filters(df: pd.DataFrame) -> pd.DataFrame:
     return filtrado
 
 
-def render_map(df: pd.DataFrame) -> None:
-    st.subheader("Mapa dos empreendimentos")
+def build_map(df: pd.DataFrame, include_popup: bool = True) -> folium.Map:
     mapa_df = df.dropna(subset=["latitude", "longitude"]).copy()
+    center = FORTALEZA_CENTER
 
-    if mapa_df.empty:
-        st.info("Nenhum empreendimento com coordenadas cadastradas para exibir no mapa.")
-        return
+    if not mapa_df.empty:
+        center = (float(mapa_df["latitude"].mean()), float(mapa_df["longitude"].mean()))
 
-    st.map(mapa_df.rename(columns={"latitude": "lat", "longitude": "lon"})[["lat", "lon"]], zoom=11)
+    fmap = folium.Map(location=center, zoom_start=12, tiles="OpenStreetMap")
+
+    for _, row in mapa_df.iterrows():
+        popup_text = None
+        if include_popup:
+            popup_text = (
+                f"<b>{row['nome']}</b><br>"
+                f"Bairro: {row['bairro']}<br>"
+                f"Construtora: {row['construtora']}<br>"
+                f"Disponíveis: {int(row['unidades_disponiveis'])}"
+            )
+        folium.Marker(
+            location=[float(row["latitude"]), float(row["longitude"])],
+            popup=popup_text,
+            tooltip=str(row["nome"]),
+            icon=folium.Icon(color="blue", icon="home", prefix="fa"),
+        ).add_to(fmap)
+
+    return fmap
+
+
+def render_public_map(df: pd.DataFrame) -> None:
+    st.subheader("Mapa dos empreendimentos")
+    st.caption("Visualização pública da localização dos imóveis cadastrados.")
+    fmap = build_map(df)
+    st_folium(fmap, use_container_width=True, height=430, key="public_map")
 
 
 def render_catalog(df: pd.DataFrame) -> None:
@@ -186,16 +213,39 @@ def next_id(df: pd.DataFrame) -> int:
     return int(df["id"].max()) + 1
 
 
+def render_admin_click_map(df: pd.DataFrame) -> tuple[float, float]:
+    st.caption("ADM: clique no mapa para preencher latitude e longitude do novo imóvel.")
+
+    if "new_lat" not in st.session_state:
+        st.session_state.new_lat = FORTALEZA_CENTER[0]
+    if "new_lon" not in st.session_state:
+        st.session_state.new_lon = FORTALEZA_CENTER[1]
+
+    fmap = build_map(df)
+    click = st_folium(fmap, use_container_width=True, height=360, key="admin_pick_map")
+
+    clicked = click.get("last_clicked") if click else None
+    if clicked:
+        st.session_state.new_lat = float(clicked["lat"])
+        st.session_state.new_lon = float(clicked["lng"])
+        st.success("Ponto selecionado no mapa para o cadastro.")
+
+    return float(st.session_state.new_lat), float(st.session_state.new_lon)
+
+
 def render_new_launch_form(df: pd.DataFrame) -> pd.DataFrame:
     st.subheader("Cadastrar lançamento (ADM)")
+
+    selected_lat, selected_lon = render_admin_click_map(df)
+
     with st.form("novo_lancamento", clear_on_submit=True):
         nome = st.text_input("Nome do empreendimento*")
         bairro = st.text_input("Bairro*")
         construtora = st.text_input("Construtora*")
         endereco = st.text_input("Endereço")
         c_geo1, c_geo2 = st.columns(2)
-        latitude = c_geo1.number_input("Latitude*", value=-3.7319, format="%.6f")
-        longitude = c_geo2.number_input("Longitude*", value=-38.5267, format="%.6f")
+        latitude = c_geo1.number_input("Latitude*", value=selected_lat, format="%.6f")
+        longitude = c_geo2.number_input("Longitude*", value=selected_lon, format="%.6f")
         c1, c2 = st.columns(2)
         unidades_total = c1.number_input("Número total de unidades", min_value=0, value=0)
         unidades_disp = c2.number_input("Unidades disponíveis", min_value=0, value=0)
@@ -275,7 +325,7 @@ def main() -> None:
     st.set_page_config(page_title="Lançamentos Fortaleza", layout="wide")
     st.title("📍 Catálogo de Lançamentos Imobiliários — Fortaleza/CE")
     st.caption(
-        "Interface pública com mapa de localização dos empreendimentos e acesso restrito para cadastro por ADM."
+        "Interface pública com mapa inicial de localização dos empreendimentos e acesso restrito para cadastro por ADM."
     )
 
     df = load_data()
@@ -283,7 +333,9 @@ def main() -> None:
 
     render_overview(df)
     df_filtrado = render_filters(df)
-    render_map(df_filtrado)
+
+    # Interface inicial do usuário sempre inicia com o mapa carregado.
+    render_public_map(df_filtrado)
     render_catalog(df_filtrado)
 
     if is_admin:
