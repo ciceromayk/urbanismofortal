@@ -24,6 +24,8 @@ COLUMNS = [
     "longitude",
     "unidades_total",
     "unidades_disponiveis",
+    "area_media_m2",
+    "preco_medio",
     "faixa_preco",
     "previsao_entrega",
     "descricao",
@@ -57,7 +59,7 @@ def load_data() -> pd.DataFrame:
     for col in ["unidades_total", "unidades_disponiveis"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
-    for col in ["latitude", "longitude"]:
+    for col in ["latitude", "longitude", "area_media_m2", "preco_medio"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if "id" not in df.columns:
@@ -161,11 +163,24 @@ def build_map(df: pd.DataFrame, include_popup: bool = True) -> folium.Map:
                 f"Construtora: {row['construtora']}<br>"
                 f"Disponíveis: {int(row['unidades_disponiveis'])}"
             )
+
+        area_media = "N/D" if pd.isna(row["area_media_m2"]) else f"{float(row['area_media_m2']):.1f} m²"
+        preco_medio = (
+            "N/D"
+            if pd.isna(row["preco_medio"])
+            else f"R$ {float(row['preco_medio']):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        )
+        tooltip_text = (
+            f"{row['nome']} | {row['construtora']} | "
+            f"Área média: {area_media} | Preço médio: {preco_medio} | "
+            f"Disponíveis: {int(row['unidades_disponiveis'])}"
+        )
+
         folium.Marker(
             location=[float(row["latitude"]), float(row["longitude"])],
             popup=popup_text,
-            tooltip=str(row["nome"]),
-            icon=folium.Icon(color="blue", icon="home", prefix="fa"),
+            tooltip=tooltip_text,
+            icon=folium.Icon(color="red", icon="map-pin", prefix="fa"),
         ).add_to(fmap)
 
     return fmap
@@ -249,6 +264,9 @@ def render_new_launch_form(df: pd.DataFrame) -> pd.DataFrame:
         c1, c2 = st.columns(2)
         unidades_total = c1.number_input("Número total de unidades", min_value=0, value=0)
         unidades_disp = c2.number_input("Unidades disponíveis", min_value=0, value=0)
+        c3, c4 = st.columns(2)
+        area_media_m2 = c3.number_input("Área média das unidades (m²)", min_value=0.0, value=0.0, format="%.2f")
+        preco_medio = c4.number_input("Preço médio (R$)", min_value=0.0, value=0.0, format="%.2f")
         faixa_preco = st.text_input("Faixa de preço (ex.: R$ 450 mil a R$ 650 mil)")
         previsao_entrega = st.text_input("Previsão de entrega")
         telefone = st.text_input("Telefone comercial")
@@ -278,6 +296,8 @@ def render_new_launch_form(df: pd.DataFrame) -> pd.DataFrame:
                 "longitude": float(longitude),
                 "unidades_total": int(unidades_total),
                 "unidades_disponiveis": int(unidades_disp),
+                "area_media_m2": float(area_media_m2),
+                "preco_medio": float(preco_medio),
                 "faixa_preco": faixa_preco,
                 "previsao_entrega": previsao_entrega,
                 "descricao": descricao,
